@@ -11,6 +11,8 @@ const SOURCE_STYLE = {
   builtin:          { bg: "bg-pink-100",    text: "text-pink-700",    label: "Built In" },
   indeed:           { bg: "bg-yellow-100",  text: "text-yellow-700",  label: "Indeed" },
   direct:           { bg: "bg-red-100",     text: "text-red-700",     label: "Company Site" },
+  google_jobs:      { bg: "bg-red-50",      text: "text-red-600",     label: "Google Jobs" },
+  workday:          { bg: "bg-teal-100",    text: "text-teal-700",    label: "Workday" },
 };
 
 const TYPE_STYLE = {
