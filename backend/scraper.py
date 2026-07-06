@@ -63,6 +63,23 @@ def _is_relevant(title: str, desc: str = "") -> bool:
     hits = sum(1 for k in BODY_KEYWORDS if k in d)
     return hits >= 2
 
+def _is_nyc_or_remote(location: str) -> bool:
+    """Return True only for NYC or genuinely remote US roles."""
+    if not location:
+        return True  # we default blank locations to NYC
+    loc = location.lower()
+    if "new york" in loc or "nyc" in loc:
+        return True
+    if "remote" in loc:
+        # reject Canada and non-NY region-specific remotes
+        if "canada" in loc:
+            return False
+        if any(x in loc for x in ["southeast", "midwest", "west coast", "southwest", "national only"]):
+            return False
+        return True
+    return False
+
+
 def _normalize(raw: Dict) -> Dict:
     raw.setdefault("salary_range", None)
     raw.setdefault("company_type", None)
@@ -180,8 +197,7 @@ async def scrape_greenhouse(companies: List[tuple]) -> List[Dict]:
                 for job in r.json().get("jobs", []):
                     title = job.get("title", "")
                     location = job.get("location", {}).get("name", "")
-                    loc_l = location.lower()
-                    if location and not any(x in loc_l for x in ("new york", " ny,", "remote", "united states", "anywhere")):
+                    if not _is_nyc_or_remote(location):
                         continue
                     desc = BeautifulSoup(job.get("content", ""), "lxml").get_text()[:5000]
                     if not _is_relevant(title, desc):
@@ -249,8 +265,7 @@ async def scrape_lever(companies: List[tuple]) -> List[Dict]:
                 for job in r.json():
                     title = job.get("text", "")
                     location = job.get("categories", {}).get("location", "")
-                    loc_l = location.lower()
-                    if location and not any(x in loc_l for x in ("new york", " ny", "remote", "united states", "anywhere")):
+                    if not _is_nyc_or_remote(location):
                         continue
                     desc = BeautifulSoup(
                         job.get("descriptionPlain") or job.get("description", ""), "lxml"

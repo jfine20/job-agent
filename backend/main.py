@@ -42,6 +42,10 @@ async def run_daily_scrape():
                 company_type=scored["company_type"],
                 is_new=True,
             )
+            # Hard NYC gate — skip anything that isn't NYC or remote
+            loc = job_data.get("location", "").lower()
+            if loc and "new york" not in loc and "nyc" not in loc and "remote" not in loc:
+                continue
             db.add(job)
             new_count += 1
         db.commit()
