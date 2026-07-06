@@ -1,9 +1,8 @@
 import os
-import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime
-
 from typing import Optional
+
 from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -12,34 +11,44 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from database import init_db, get_db, Job, Application, ChatMessage
 from scraper import scrape_all_jobs
-from agent import score_job_fit, tailor_application, chat
+from agent import score_job, tailor_application, chat
 
 scheduler = AsyncIOScheduler()
 
 
 async def run_daily_scrape():
     from database import SessionLocal
-    print(f"[{datetime.now()}] Starting daily job scrape...")
-    jobs = await scrape_all_jobs()
+    print(f"[{datetime.now()}] Starting scrape...")
     db = SessionLocal()
     try:
+        jobs = await scrape_all_jobs()
         new_count = 0
         for job_data in jobs:
-            existing = db.query(Job).filter(Job.external_id == job_data["external_id"]).first()
-            if existing:
+            if db.query(Job).filter(Job.external_id == job_data["external_id"]).first():
                 continue
-            score, summary = score_job_fit(
-                job_data["title"], job_data["description"], job_data["company"]
-            )
+            scored = score_job(job_data["title"], job_data.get("description", ""), job_data["company"])
             job = Job(
-                **job_data,
-                fit_score=score,
-                fit_summary=summary,
+                external_id=job_data["external_id"],
+                title=job_data["title"],
+                company=job_data["company"],
+                location=job_data.get("location", ""),
+                description=job_data.get("description", ""),
+                apply_url=job_data.get("apply_url", ""),
+                source=job_data.get("source", ""),
+                salary_range=job_data.get("salary_range"),
+                fit_score=scored["fit_score"],
+                fit_summary=scored["fit_summary"],
+                seniority=scored["seniority"],
+                company_type=scored["company_type"],
+                is_new=True,
             )
             db.add(job)
             new_count += 1
         db.commit()
-        print(f"[{datetime.now()}] Scrape complete. Added {new_count} new jobs.")
+        print(f"[{datetime.now()}] Done. Added {new_count} new jobs.")
+    except Exception as e:
+        print(f"Scrape error: {e}")
+        db.rollback()
     finally:
         db.close()
 
@@ -49,46 +58,50 @@ async def lifespan(app: FastAPI):
     init_db()
     scheduler.add_job(run_daily_scrape, "cron", hour=9, minute=0)
     scheduler.start()
-    print("Scheduler started — daily scrape at 9:00 AM")
+    print("Scheduler ready — daily scrape at 9:00 AM")
     yield
     scheduler.shutdown()
 
 
 app = FastAPI(title="Sam's Job Agent", lifespan=lifespan)
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://localhost:3000"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
 )
 
 
-# --- Job endpoints ---
+# ── Jobs ──────────────────────────────────────────────────────────────────────
 
 @app.get("/api/jobs")
-def get_jobs(min_score: float = 0, db: Session = Depends(get_db)):
-    jobs = (
-        db.query(Job)
-        .filter(Job.fit_score >= min_score)
-        .order_by(Job.fit_score.desc(), Job.scraped_at.desc())
-        .all()
-    )
-    return jobs
+def get_jobs(
+    min_score: float = 0,
+    source: Optional[str] = None,
+    company_type: Optional[str] = None,
+    seniority: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    q = db.query(Job).filter(Job.fit_score >= min_score)
+    if source:
+        q = q.filter(Job.source == source)
+    if company_type:
+        q = q.filter(Job.company_type == company_type)
+    if seniority:
+        q = q.filter(Job.seniority == seniority)
+    return q.order_by(Job.fit_score.desc(), Job.scraped_at.desc()).all()
 
 
 @app.post("/api/jobs/scrape")
 async def trigger_scrape(background_tasks: BackgroundTasks):
     background_tasks.add_task(run_daily_scrape)
-    return {"message": "Scrape started in background"}
+    return {"message": "Scrape started"}
 
 
 @app.get("/api/jobs/{job_id}")
 def get_job(job_id: int, db: Session = Depends(get_db)):
     job = db.query(Job).filter(Job.id == job_id).first()
     if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
+        raise HTTPException(404, "Not found")
     return job
 
 
@@ -96,22 +109,44 @@ def get_job(job_id: int, db: Session = Depends(get_db)):
 def tailor_job(job_id: int, db: Session = Depends(get_db)):
     job = db.query(Job).filter(Job.id == job_id).first()
     if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-    result = tailor_application(job.title, job.description, job.company)
-    return result
+        raise HTTPException(404, "Not found")
+    return tailor_application(job.title, job.description or "", job.company)
+
+
+@app.patch("/api/jobs/{job_id}/seen")
+def mark_seen(job_id: int, db: Session = Depends(get_db)):
+    job = db.query(Job).filter(Job.id == job_id).first()
+    if job:
+        job.is_new = False
+        db.commit()
+    return {"ok": True}
 
 
 @app.delete("/api/jobs/{job_id}")
 def delete_job(job_id: int, db: Session = Depends(get_db)):
     job = db.query(Job).filter(Job.id == job_id).first()
     if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
+        raise HTTPException(404, "Not found")
     db.delete(job)
     db.commit()
-    return {"message": "Job deleted"}
+    return {"ok": True}
 
 
-# --- Application tracker endpoints ---
+@app.get("/api/jobs/stats/summary")
+def stats(db: Session = Depends(get_db)):
+    total = db.query(Job).count()
+    new = db.query(Job).filter(Job.is_new == True).count()
+    by_source = {}
+    for job in db.query(Job).all():
+        by_source[job.source] = by_source.get(job.source, 0) + 1
+    by_type = {}
+    for job in db.query(Job).all():
+        k = job.company_type or "other"
+        by_type[k] = by_type.get(k, 0) + 1
+    return {"total": total, "new": new, "by_source": by_source, "by_type": by_type}
+
+
+# ── Applications ──────────────────────────────────────────────────────────────
 
 class ApplicationCreate(BaseModel):
     job_id: Optional[int] = None
@@ -134,39 +169,39 @@ def get_applications(db: Session = Depends(get_db)):
 
 @app.post("/api/applications")
 def create_application(data: ApplicationCreate, db: Session = Depends(get_db)):
-    app_obj = Application(**data.dict())
-    db.add(app_obj)
+    obj = Application(**data.dict())
+    db.add(obj)
     db.commit()
-    db.refresh(app_obj)
-    return app_obj
+    db.refresh(obj)
+    return obj
 
 
 @app.patch("/api/applications/{app_id}")
 def update_application(app_id: int, data: ApplicationUpdate, db: Session = Depends(get_db)):
-    app_obj = db.query(Application).filter(Application.id == app_id).first()
-    if not app_obj:
-        raise HTTPException(status_code=404, detail="Application not found")
+    obj = db.query(Application).filter(Application.id == app_id).first()
+    if not obj:
+        raise HTTPException(404, "Not found")
     if data.status is not None:
-        app_obj.status = data.status
+        obj.status = data.status
     if data.notes is not None:
-        app_obj.notes = data.notes
-    app_obj.updated_at = datetime.utcnow()
+        obj.notes = data.notes
+    obj.updated_at = datetime.utcnow()
     db.commit()
-    db.refresh(app_obj)
-    return app_obj
+    db.refresh(obj)
+    return obj
 
 
 @app.delete("/api/applications/{app_id}")
 def delete_application(app_id: int, db: Session = Depends(get_db)):
-    app_obj = db.query(Application).filter(Application.id == app_id).first()
-    if not app_obj:
-        raise HTTPException(status_code=404, detail="Application not found")
-    db.delete(app_obj)
+    obj = db.query(Application).filter(Application.id == app_id).first()
+    if not obj:
+        raise HTTPException(404, "Not found")
+    db.delete(obj)
     db.commit()
-    return {"message": "Deleted"}
+    return {"ok": True}
 
 
-# --- Chat endpoint ---
+# ── Chat ──────────────────────────────────────────────────────────────────────
 
 class ChatRequest(BaseModel):
     message: str
@@ -176,15 +211,11 @@ class ChatRequest(BaseModel):
 def chat_endpoint(req: ChatRequest, db: Session = Depends(get_db)):
     db.add(ChatMessage(role="user", content=req.message))
     db.commit()
-
     history = db.query(ChatMessage).order_by(ChatMessage.created_at).all()
     messages = [{"role": m.role, "content": m.content} for m in history]
-
     reply = chat(messages)
-
     db.add(ChatMessage(role="assistant", content=reply))
     db.commit()
-
     return {"reply": reply}
 
 
@@ -192,13 +223,13 @@ def chat_endpoint(req: ChatRequest, db: Session = Depends(get_db)):
 def clear_chat(db: Session = Depends(get_db)):
     db.query(ChatMessage).delete()
     db.commit()
-    return {"message": "Chat cleared"}
+    return {"ok": True}
 
 
 @app.get("/api/chat/history")
 def get_chat_history(db: Session = Depends(get_db)):
-    messages = db.query(ChatMessage).order_by(ChatMessage.created_at).all()
-    return [{"role": m.role, "content": m.content, "id": m.id} for m in messages]
+    msgs = db.query(ChatMessage).order_by(ChatMessage.created_at).all()
+    return [{"role": m.role, "content": m.content, "id": m.id} for m in msgs]
 
 
 @app.get("/health")

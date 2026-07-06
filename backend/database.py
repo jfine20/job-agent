@@ -19,9 +19,12 @@ class Job(Base):
     location = Column(String)
     description = Column(Text)
     apply_url = Column(String)
-    source = Column(String)
+    source = Column(String)          # greenhouse / lever / linkedin / efinancialcareers / wellfound / builtin / indeed
     fit_score = Column(Float, nullable=True)
     fit_summary = Column(Text, nullable=True)
+    salary_range = Column(String, nullable=True)
+    seniority = Column(String, nullable=True)   # entry / associate / manager / vp / director / executive
+    company_type = Column(String, nullable=True) # pe / vc / real_estate / climate / asset_mgmt / wealth / tech / other
     scraped_at = Column(DateTime, default=datetime.utcnow)
     is_new = Column(Boolean, default=True)
 
@@ -34,7 +37,7 @@ class Application(Base):
     company = Column(String)
     title = Column(String)
     apply_url = Column(String, nullable=True)
-    status = Column(String, default="applied")  # applied, phone_screen, interviewing, offer, rejected, withdrawn
+    status = Column(String, default="applied")
     applied_date = Column(DateTime, default=datetime.utcnow)
     notes = Column(Text, nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
@@ -44,7 +47,7 @@ class ChatMessage(Base):
     __tablename__ = "chat_messages"
 
     id = Column(Integer, primary_key=True, index=True)
-    role = Column(String)  # user or assistant
+    role = Column(String)
     content = Column(Text)
     created_at = Column(DateTime, default=datetime.utcnow)
 

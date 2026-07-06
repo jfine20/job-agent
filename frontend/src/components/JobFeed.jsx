@@ -1,146 +1,237 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 
 const API = "http://localhost:8000";
 
-const STATUS_COLORS = {
-  applied: "bg-blue-100 text-blue-800",
-  phone_screen: "bg-yellow-100 text-yellow-800",
-  interviewing: "bg-purple-100 text-purple-800",
-  offer: "bg-green-100 text-green-800",
-  rejected: "bg-red-100 text-red-800",
-  withdrawn: "bg-gray-100 text-gray-800",
+const SOURCE_STYLE = {
+  greenhouse:       { bg: "bg-emerald-100", text: "text-emerald-700", label: "Greenhouse" },
+  lever:            { bg: "bg-sky-100",     text: "text-sky-700",     label: "Lever" },
+  linkedin:         { bg: "bg-blue-100",    text: "text-blue-700",    label: "LinkedIn" },
+  efinancialcareers:{ bg: "bg-violet-100",  text: "text-violet-700",  label: "eFinancial" },
+  wellfound:        { bg: "bg-orange-100",  text: "text-orange-700",  label: "Wellfound" },
+  builtin:          { bg: "bg-pink-100",    text: "text-pink-700",    label: "Built In" },
+  indeed:           { bg: "bg-yellow-100",  text: "text-yellow-700",  label: "Indeed" },
 };
 
-function ScoreBadge({ score }) {
-  const color =
-    score >= 8 ? "bg-green-500" : score >= 5 ? "bg-yellow-500" : "bg-red-400";
+const TYPE_STYLE = {
+  pe:        { color: "bg-indigo-50 text-indigo-700 border border-indigo-200", label: "Private Equity" },
+  vc:        { color: "bg-purple-50 text-purple-700 border border-purple-200", label: "Venture Capital" },
+  real_estate:{ color: "bg-amber-50 text-amber-700 border border-amber-200",  label: "Real Estate" },
+  climate:   { color: "bg-green-50 text-green-700 border border-green-200",   label: "Climate" },
+  asset_mgmt:{ color: "bg-blue-50 text-blue-700 border border-blue-200",      label: "Asset Mgmt" },
+  wealth:    { color: "bg-rose-50 text-rose-700 border border-rose-200",      label: "Wealth" },
+  fintech:   { color: "bg-cyan-50 text-cyan-700 border border-cyan-200",      label: "Fintech" },
+  other:     { color: "bg-gray-50 text-gray-600 border border-gray-200",      label: "Other" },
+};
+
+const SCORE_COLOR = (s) =>
+  s >= 8 ? "bg-green-500 text-white" :
+  s >= 6 ? "bg-lime-500 text-white" :
+  s >= 4 ? "bg-yellow-400 text-gray-900" :
+           "bg-red-400 text-white";
+
+function Badge({ children, className }) {
   return (
-    <span className={`${color} text-white text-xs font-bold px-2 py-1 rounded-full`}>
-      {score?.toFixed(1)}/10
+    <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${className}`}>
+      {children}
     </span>
   );
 }
 
-function JobCard({ job, onTrack }) {
+function JobCard({ job, onTrack, onDismiss }) {
   const [expanded, setExpanded] = useState(false);
   const [tailoring, setTailoring] = useState(false);
   const [tailored, setTailored] = useState(null);
 
+  const src = SOURCE_STYLE[job.source] || { bg: "bg-gray-100", text: "text-gray-600", label: job.source };
+  const typ = TYPE_STYLE[job.company_type] || TYPE_STYLE.other;
+
   const handleTailor = async () => {
     setTailoring(true);
     try {
-      const res = await fetch(`${API}/api/jobs/${job.id}/tailor`, { method: "POST" });
-      const data = await res.json();
-      setTailored(data);
+      const r = await fetch(`${API}/api/jobs/${job.id}/tailor`, { method: "POST" });
+      setTailored(await r.json());
     } finally {
       setTailoring(false);
     }
   };
 
   return (
-    <div className="bg-white border border-gray-200 rounded-xl p-4 shadow-sm hover:shadow-md transition-shadow">
-      <div className="flex items-start justify-between gap-2">
-        <div className="flex-1 min-w-0">
-          <h3 className="font-semibold text-gray-900 truncate">{job.title}</h3>
-          <div className="flex items-center gap-2 flex-wrap">
-            <p className="text-sm text-gray-600">{job.company} · {job.location}</p>
-            {job.source && (
-              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${SOURCE_COLORS[job.source] || "bg-gray-100 text-gray-600"}`}>
-                {job.source}
-              </span>
+    <div className={`bg-white rounded-2xl border shadow-sm hover:shadow-md transition-all duration-150 overflow-hidden ${job.is_new ? "border-indigo-300 ring-1 ring-indigo-200" : "border-gray-200"}`}>
+      <div className="p-5">
+        <div className="flex items-start gap-3">
+          {/* Score */}
+          <div className={`flex-shrink-0 w-12 h-12 rounded-xl flex flex-col items-center justify-center font-bold ${SCORE_COLOR(job.fit_score)}`}>
+            <span className="text-lg leading-tight">{job.fit_score?.toFixed(0)}</span>
+            <span className="text-xs opacity-80">/10</span>
+          </div>
+
+          {/* Main info */}
+          <div className="flex-1 min-w-0">
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <h3 className="font-semibold text-gray-900 leading-snug">{job.title}</h3>
+                <p className="text-sm text-gray-500 mt-0.5">{job.company} &middot; {job.location}</p>
+              </div>
+              {job.is_new && (
+                <span className="flex-shrink-0 bg-indigo-600 text-white text-xs font-bold px-2 py-0.5 rounded-full">NEW</span>
+              )}
+            </div>
+
+            {/* Badges */}
+            <div className="flex flex-wrap gap-1.5 mt-2">
+              <Badge className={`${src.bg} ${src.text}`}>{src.label}</Badge>
+              {job.company_type && <Badge className={typ.color}>{typ.label}</Badge>}
+              {job.seniority && <Badge className="bg-gray-100 text-gray-600">{job.seniority}</Badge>}
+              {job.salary_range && <Badge className="bg-green-100 text-green-700">{job.salary_range}</Badge>}
+            </div>
+
+            {/* AI summary */}
+            {job.fit_summary && (
+              <p className="mt-2 text-sm text-gray-500 italic leading-relaxed">{job.fit_summary}</p>
             )}
           </div>
         </div>
-        <ScoreBadge score={job.fit_score} />
-      </div>
 
-      {job.fit_summary && (
-        <p className="mt-2 text-sm text-gray-500 italic">{job.fit_summary}</p>
-      )}
-
-      <div className="mt-3 flex flex-wrap gap-2">
-        <button
-          onClick={() => setExpanded(!expanded)}
-          className="text-xs text-blue-600 hover:underline"
-        >
-          {expanded ? "Hide description" : "Show description"}
-        </button>
-        <button
-          onClick={handleTailor}
-          disabled={tailoring}
-          className="text-xs bg-indigo-600 text-white px-3 py-1 rounded-full hover:bg-indigo-700 disabled:opacity-50"
-        >
-          {tailoring ? "Generating..." : "Tailor Resume"}
-        </button>
-        <button
-          onClick={() => onTrack(job)}
-          className="text-xs bg-green-600 text-white px-3 py-1 rounded-full hover:bg-green-700"
-        >
-          Track Application
-        </button>
-        {job.apply_url && (
-          <a
-            href={job.apply_url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-xs bg-gray-800 text-white px-3 py-1 rounded-full hover:bg-gray-900"
+        {/* Actions */}
+        <div className="flex flex-wrap gap-2 mt-4 pt-3 border-t border-gray-100">
+          <button onClick={() => setExpanded(!expanded)} className="text-sm text-indigo-600 hover:text-indigo-800 font-medium">
+            {expanded ? "Hide description" : "Show description"}
+          </button>
+          <button
+            onClick={handleTailor}
+            disabled={tailoring}
+            className="text-sm bg-indigo-600 text-white px-3 py-1 rounded-lg hover:bg-indigo-700 disabled:opacity-50 font-medium"
           >
-            Apply
-          </a>
-        )}
+            {tailoring ? "Writing..." : "Tailor for me"}
+          </button>
+          <button
+            onClick={() => onTrack(job)}
+            className="text-sm bg-green-600 text-white px-3 py-1 rounded-lg hover:bg-green-700 font-medium"
+          >
+            Track
+          </button>
+          {job.apply_url && (
+            <a
+              href={job.apply_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-sm bg-gray-900 text-white px-3 py-1 rounded-lg hover:bg-gray-700 font-medium"
+            >
+              Apply →
+            </a>
+          )}
+          <button
+            onClick={() => onDismiss(job.id)}
+            className="text-sm text-gray-400 hover:text-red-500 ml-auto"
+          >
+            Dismiss
+          </button>
+        </div>
       </div>
 
+      {/* Description */}
       {expanded && (
-        <div className="mt-3 text-xs text-gray-600 bg-gray-50 rounded p-3 max-h-48 overflow-y-auto whitespace-pre-wrap">
-          {job.description}
+        <div className="px-5 pb-4">
+          <div className="bg-gray-50 rounded-xl p-4 text-xs text-gray-600 max-h-52 overflow-y-auto whitespace-pre-wrap leading-relaxed">
+            {job.description}
+          </div>
         </div>
       )}
 
+      {/* Tailored output */}
       {tailored && (
-        <div className="mt-3 space-y-3">
-          <div className="bg-indigo-50 rounded p-3">
-            <p className="text-xs font-semibold text-indigo-800 mb-1">Tailored Resume Bullets</p>
-            <pre className="text-xs text-indigo-700 whitespace-pre-wrap">{tailored.tailored_bullets}</pre>
+        <div className="px-5 pb-5 space-y-3">
+          <div className="bg-indigo-50 rounded-xl p-4">
+            <p className="text-xs font-semibold text-indigo-800 mb-2 uppercase tracking-wide">Tailored Resume Bullets</p>
+            <pre className="text-xs text-indigo-700 whitespace-pre-wrap leading-relaxed">{tailored.tailored_bullets}</pre>
           </div>
-          <div className="bg-green-50 rounded p-3">
-            <p className="text-xs font-semibold text-green-800 mb-1">Cover Letter</p>
-            <pre className="text-xs text-green-700 whitespace-pre-wrap">{tailored.cover_letter}</pre>
-          </div>
+          {tailored.cover_letter && (
+            <div className="bg-emerald-50 rounded-xl p-4">
+              <p className="text-xs font-semibold text-emerald-800 mb-2 uppercase tracking-wide">Cover Letter</p>
+              <pre className="text-xs text-emerald-700 whitespace-pre-wrap leading-relaxed">{tailored.cover_letter}</pre>
+            </div>
+          )}
         </div>
       )}
     </div>
   );
 }
 
-const SOURCE_COLORS = {
-  greenhouse: "bg-green-100 text-green-700",
-  lever: "bg-blue-100 text-blue-700",
-  indeed: "bg-orange-100 text-orange-700",
-};
-
 export default function JobFeed() {
   const [jobs, setJobs] = useState([]);
+  const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [scraping, setScraping] = useState(false);
-  const [minScore, setMinScore] = useState(5);
+  const [scrapeMsg, setScrapeMsg] = useState("");
+  const [toast, setToast] = useState("");
+
+  // Filters
+  const [minScore, setMinScore] = useState(0);
   const [sortBy, setSortBy] = useState("score");
   const [filterSource, setFilterSource] = useState("all");
-  const [tracked, setTracked] = useState(null);
+  const [filterType, setFilterType] = useState("all");
+  const [filterSeniority, setFilterSeniority] = useState("all");
+  const [showNew, setShowNew] = useState(false);
 
-  const fetchJobs = async () => {
+  const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(""), 3000); };
+
+  const fetchJobs = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(`${API}/api/jobs?min_score=${minScore}`);
-      setJobs(await res.json());
+      const params = new URLSearchParams({ min_score: minScore });
+      if (filterSource !== "all") params.set("source", filterSource);
+      if (filterType !== "all") params.set("company_type", filterType);
+      if (filterSeniority !== "all") params.set("seniority", filterSeniority);
+      const [jobsRes, statsRes] = await Promise.all([
+        fetch(`${API}/api/jobs?${params}`),
+        fetch(`${API}/api/jobs/stats/summary`),
+      ]);
+      const jobsData = await jobsRes.json();
+      setJobs(Array.isArray(jobsData) ? jobsData : []);
+      if (statsRes.ok) setStats(await statsRes.json());
     } finally {
       setLoading(false);
     }
+  }, [minScore, filterSource, filterType, filterSeniority]);
+
+  useEffect(() => { fetchJobs(); }, [fetchJobs]);
+
+  const triggerScrape = async () => {
+    setScraping(true);
+    setScrapeMsg("Searching LinkedIn, eFinancialCareers, Greenhouse, Lever, Wellfound, Indeed…");
+    await fetch(`${API}/api/jobs/scrape`, { method: "POST" });
+    const before = jobs.length;
+    const poll = setInterval(async () => {
+      const r = await fetch(`${API}/api/jobs?min_score=${minScore}`);
+      const data = await r.json();
+      if (data.length > before) {
+        setJobs(data);
+        setScraping(false);
+        setScrapeMsg("");
+        clearInterval(poll);
+        showToast(`Found ${data.length - before} new jobs!`);
+      }
+    }, 6000);
+    setTimeout(() => { setScraping(false); setScrapeMsg(""); clearInterval(poll); fetchJobs(); }, 150000);
   };
 
-  useEffect(() => { fetchJobs(); }, [minScore]);
+  const trackJob = async (job) => {
+    await fetch(`${API}/api/applications`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ job_id: job.id, company: job.company, title: job.title, apply_url: job.apply_url, status: "applied" }),
+    });
+    showToast(`"${job.title}" added to tracker`);
+  };
 
-  const sortedJobs = [...jobs]
-    .filter(j => filterSource === "all" || j.source === filterSource)
+  const dismissJob = async (id) => {
+    await fetch(`${API}/api/jobs/${id}/seen`, { method: "PATCH" });
+    await fetch(`${API}/api/jobs/${id}`, { method: "DELETE" });
+    setJobs(prev => prev.filter(j => j.id !== id));
+  };
+
+  const sorted = [...jobs]
+    .filter(j => !showNew || j.is_new)
     .sort((a, b) => {
       if (sortBy === "score") return (b.fit_score || 0) - (a.fit_score || 0);
       if (sortBy === "date") return new Date(b.scraped_at) - new Date(a.scraped_at);
@@ -148,87 +239,111 @@ export default function JobFeed() {
       return 0;
     });
 
-  const triggerScrape = async () => {
-    setScraping(true);
-    await fetch(`${API}/api/jobs/scrape`, { method: "POST" });
-    // Scrape takes ~60s, poll until count grows
-    const start = jobs.length;
-    const poll = setInterval(async () => {
-      const res = await fetch(`${API}/api/jobs?min_score=${minScore}`);
-      const data = await res.json();
-      if (data.length > start) {
-        setJobs(data);
-        setScraping(false);
-        clearInterval(poll);
-      }
-    }, 5000);
-    setTimeout(() => { setScraping(false); clearInterval(poll); fetchJobs(); }, 120000);
-  };
-
-  const trackJob = async (job) => {
-    await fetch(`${API}/api/applications`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        job_id: job.id,
-        company: job.company,
-        title: job.title,
-        apply_url: job.apply_url,
-        status: "applied",
-      }),
-    });
-    setTracked(job.title);
-    setTimeout(() => setTracked(null), 3000);
-  };
+  const newCount = jobs.filter(j => j.is_new).length;
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-3 flex-wrap">
-          <label className="text-sm font-medium text-gray-700">Min score:</label>
-          <select value={minScore} onChange={(e) => setMinScore(Number(e.target.value))} className="text-sm border border-gray-300 rounded px-2 py-1">
-            {[0, 3, 5, 7, 8].map((v) => <option key={v} value={v}>{v}+</option>)}
-          </select>
-          <label className="text-sm font-medium text-gray-700">Sort:</label>
-          <select value={sortBy} onChange={(e) => setSortBy(e.target.value)} className="text-sm border border-gray-300 rounded px-2 py-1">
-            <option value="score">Best fit</option>
-            <option value="date">Newest</option>
-            <option value="company">Company A-Z</option>
-          </select>
-          <label className="text-sm font-medium text-gray-700">Source:</label>
-          <select value={filterSource} onChange={(e) => setFilterSource(e.target.value)} className="text-sm border border-gray-300 rounded px-2 py-1">
-            <option value="all">All</option>
-            <option value="greenhouse">Greenhouse</option>
-            <option value="lever">Lever</option>
-            <option value="indeed">Indeed</option>
-          </select>
-          <span className="text-sm text-gray-500">{sortedJobs.length} jobs</span>
-        </div>
-        <button
-          onClick={triggerScrape}
-          disabled={scraping}
-          className="text-sm bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 disabled:opacity-50"
-        >
-          {scraping ? "Scraping..." : "Scrape Now"}
-        </button>
-      </div>
-
-      {tracked && (
-        <div className="mb-3 bg-green-100 text-green-800 text-sm px-4 py-2 rounded-lg">
-          Added "{tracked}" to your application tracker.
+      {/* Stats bar */}
+      {stats && (
+        <div className="flex flex-wrap gap-2 mb-4 text-xs text-gray-500">
+          <span className="font-medium text-gray-700">{stats.total} total jobs</span>
+          {newCount > 0 && <span className="text-indigo-600 font-semibold">{newCount} new</span>}
+          {Object.entries(stats.by_source || {}).map(([src, n]) => (
+            <span key={src}>{SOURCE_STYLE[src]?.label || src}: {n}</span>
+          ))}
         </div>
       )}
 
+      {/* Filters */}
+      <div className="bg-white border border-gray-200 rounded-2xl p-4 mb-4 flex flex-wrap gap-3 items-center">
+        <div className="flex items-center gap-1.5">
+          <label className="text-xs font-medium text-gray-600">Min score</label>
+          <select value={minScore} onChange={e => setMinScore(Number(e.target.value))} className="text-sm border border-gray-300 rounded-lg px-2 py-1">
+            {[0,3,5,6,7,8].map(v => <option key={v} value={v}>{v}+</option>)}
+          </select>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <label className="text-xs font-medium text-gray-600">Sort</label>
+          <select value={sortBy} onChange={e => setSortBy(e.target.value)} className="text-sm border border-gray-300 rounded-lg px-2 py-1">
+            <option value="score">Best fit</option>
+            <option value="date">Newest</option>
+            <option value="company">Company</option>
+          </select>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <label className="text-xs font-medium text-gray-600">Source</label>
+          <select value={filterSource} onChange={e => setFilterSource(e.target.value)} className="text-sm border border-gray-300 rounded-lg px-2 py-1">
+            <option value="all">All sources</option>
+            <option value="greenhouse">Greenhouse</option>
+            <option value="lever">Lever</option>
+            <option value="linkedin">LinkedIn</option>
+            <option value="efinancialcareers">eFinancial</option>
+            <option value="wellfound">Wellfound</option>
+            <option value="builtin">Built In</option>
+            <option value="indeed">Indeed</option>
+          </select>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <label className="text-xs font-medium text-gray-600">Industry</label>
+          <select value={filterType} onChange={e => setFilterType(e.target.value)} className="text-sm border border-gray-300 rounded-lg px-2 py-1">
+            <option value="all">All types</option>
+            <option value="pe">Private Equity</option>
+            <option value="vc">Venture Capital</option>
+            <option value="real_estate">Real Estate</option>
+            <option value="climate">Climate</option>
+            <option value="asset_mgmt">Asset Mgmt</option>
+            <option value="wealth">Wealth</option>
+            <option value="fintech">Fintech</option>
+          </select>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <label className="text-xs font-medium text-gray-600">Level</label>
+          <select value={filterSeniority} onChange={e => setFilterSeniority(e.target.value)} className="text-sm border border-gray-300 rounded-lg px-2 py-1">
+            <option value="all">All levels</option>
+            <option value="entry">Entry</option>
+            <option value="associate">Associate</option>
+            <option value="manager">Manager</option>
+          </select>
+        </div>
+        <label className="flex items-center gap-1.5 cursor-pointer ml-auto">
+          <input type="checkbox" checked={showNew} onChange={e => setShowNew(e.target.checked)} className="rounded" />
+          <span className="text-xs font-medium text-gray-600">New only</span>
+        </label>
+        <span className="text-xs text-gray-400">{sorted.length} showing</span>
+        <button
+          onClick={triggerScrape}
+          disabled={scraping}
+          className="ml-auto bg-indigo-600 text-white text-sm font-medium px-4 py-2 rounded-xl hover:bg-indigo-700 disabled:opacity-60 transition-colors"
+        >
+          {scraping ? "Searching…" : "Search Now"}
+        </button>
+      </div>
+
+      {/* Scrape progress */}
+      {scraping && scrapeMsg && (
+        <div className="mb-4 bg-indigo-50 border border-indigo-200 rounded-xl px-4 py-3 text-sm text-indigo-700 flex items-center gap-2">
+          <div className="w-4 h-4 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin flex-shrink-0" />
+          {scrapeMsg}
+        </div>
+      )}
+
+      {/* Toast */}
+      {toast && (
+        <div className="mb-3 bg-green-50 border border-green-200 text-green-800 text-sm px-4 py-2 rounded-xl">{toast}</div>
+      )}
+
+      {/* Job list */}
       {loading ? (
-        <div className="text-center py-12 text-gray-400">Loading jobs...</div>
-      ) : jobs.length === 0 ? (
-        <div className="text-center py-12 text-gray-400">
-          No jobs yet. Click "Scrape Now" to find matches.
+        <div className="text-center py-16 text-gray-400">Loading…</div>
+      ) : sorted.length === 0 ? (
+        <div className="text-center py-16 text-gray-400">
+          <p className="text-lg mb-2">No jobs yet.</p>
+          <p className="text-sm">Hit "Search Now" to scrape LinkedIn, eFinancialCareers, Greenhouse, Lever, Wellfound, and more.</p>
         </div>
       ) : (
         <div className="space-y-3">
-          {sortedJobs.map((job) => (
-            <JobCard key={job.id} job={job} onTrack={trackJob} />
+          {sorted.map(job => (
+            <JobCard key={job.id} job={job} onTrack={trackJob} onDismiss={dismissJob} />
           ))}
         </div>
       )}

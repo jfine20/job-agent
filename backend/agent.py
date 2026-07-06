@@ -3,120 +3,123 @@ import anthropic
 from resume_context import RESUME, PROFILE_SUMMARY
 
 client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-MODEL = "claude-sonnet-4-6"
+MODEL_SCORE = "claude-haiku-4-5-20251001"   # fast + cheap for batch scoring
+MODEL_CHAT  = "claude-sonnet-4-6"            # best for chat + tailoring
 
 
-def score_job_fit(job_title: str, job_description: str, company: str):
-    """Score a job listing 0-10 for fit with Sam's profile. Returns (score, summary)."""
-    prompt = f"""You are a career advisor helping Samantha Shenker find the right job.
+SCORE_SYSTEM = f"""You are a career advisor scoring job listings for Samantha Shenker.
 
-SAMANTHA'S PROFILE:
 {PROFILE_SUMMARY}
 
-JOB LISTING:
-Title: {job_title}
+Scoring rubric (0-10):
+- 9-10: Near-perfect match — associate/coordinator level IR, capital formation, or fund ops role; NYC; 0-3 yrs exp required
+- 7-8: Strong match — core IR/fundraising skills needed, company is relevant (PE/VC/real estate/climate), junior-to-mid level
+- 5-6: Decent match — overlapping skills but not a perfect title/industry fit, or slightly too senior
+- 3-4: Stretch — adjacent role, she could make a case but it's a reach
+- 1-2: Poor fit — too senior, wrong function, wrong industry, or requires hard skills she lacks
+- 0: No fit — pure tech/engineering/accounting/legal
+
+Seniority levels: entry (0-1yr), associate (1-4yr), manager (4-7yr), vp (7-12yr), director (10+yr), executive (C-suite)
+Company types: pe, vc, real_estate, climate, asset_mgmt, wealth, fintech, other"""
+
+
+def score_job(title: str, description: str, company: str) -> dict:
+    """Score a single job. Returns dict with score, seniority, company_type, summary."""
+    prompt = f"""Job to evaluate:
+Title: {title}
 Company: {company}
-Description: {job_description[:3000]}
+Description: {description[:4000]}
 
-Score this job's fit for Samantha on a scale of 0-10, where:
-- 8-10: Excellent fit, she should definitely apply
-- 5-7: Good fit, worth considering
-- 3-4: Partial fit, stretch role
-- 0-2: Poor fit, not recommended
+Respond in EXACTLY this format (no other text):
+SCORE: [0-10 number]
+SENIORITY: [entry/associate/manager/vp/director/executive]
+COMPANY_TYPE: [pe/vc/real_estate/climate/asset_mgmt/wealth/fintech/other]
+SUMMARY: [1 sentence: key reason for score + what to highlight if applying]"""
 
-Respond with ONLY:
-SCORE: [number]
-SUMMARY: [1-2 sentences explaining why it is or isn't a fit, and what to highlight if she applies]"""
+    try:
+        resp = client.messages.create(
+            model=MODEL_SCORE,
+            max_tokens=150,
+            system=SCORE_SYSTEM,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = resp.content[0].text.strip()
+        result = {"fit_score": 5.0, "seniority": "associate", "company_type": "other", "fit_summary": ""}
+        for line in text.splitlines():
+            if line.startswith("SCORE:"):
+                try:
+                    result["fit_score"] = float(line.split(":", 1)[1].strip())
+                except ValueError:
+                    pass
+            elif line.startswith("SENIORITY:"):
+                result["seniority"] = line.split(":", 1)[1].strip().lower()
+            elif line.startswith("COMPANY_TYPE:"):
+                result["company_type"] = line.split(":", 1)[1].strip().lower()
+            elif line.startswith("SUMMARY:"):
+                result["fit_summary"] = line.split(":", 1)[1].strip()
+        return result
+    except Exception as e:
+        print(f"Scoring error: {e}")
+        return {"fit_score": 5.0, "seniority": "associate", "company_type": "other", "fit_summary": ""}
 
-    response = client.messages.create(
-        model=MODEL,
-        max_tokens=200,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    text = response.content[0].text.strip()
 
-    score = 5.0
-    summary = "No summary available."
-    for line in text.splitlines():
-        if line.startswith("SCORE:"):
-            try:
-                score = float(line.replace("SCORE:", "").strip())
-            except ValueError:
-                pass
-        elif line.startswith("SUMMARY:"):
-            summary = line.replace("SUMMARY:", "").strip()
-
-    return score, summary
-
-
-def tailor_application(job_title: str, job_description: str, company: str) -> dict:
-    """Generate tailored resume bullets and cover letter for a specific job."""
+def tailor_application(title: str, description: str, company: str) -> dict:
     prompt = f"""You are a career coach helping Samantha Shenker apply for a job.
 
 SAMANTHA'S RESUME:
 {RESUME}
 
 JOB:
-Title: {job_title}
+Title: {title}
 Company: {company}
-Description: {job_description[:3000]}
+Description: {description[:4000]}
 
 Provide:
-1. TAILORED_BULLETS: 4-5 resume bullet points that best match this role (rewrite existing bullets to emphasize relevant experience)
-2. COVER_LETTER: A concise, professional cover letter (3 paragraphs max) tailored to this specific role and company
+1. TAILORED_BULLETS: 5 resume bullets that best match this role (rewrite her existing bullets to directly mirror the job's language and priorities)
+2. COVER_LETTER: A tight 3-paragraph cover letter (opening hook, why her experience fits, why this company/role specifically)
 
-Format your response as:
+Format:
 TAILORED_BULLETS:
-- [bullet 1]
-- [bullet 2]
+- [bullet]
 ...
 
 COVER_LETTER:
-[cover letter text]"""
+[letter]"""
 
-    response = client.messages.create(
-        model=MODEL,
-        max_tokens=1000,
+    resp = client.messages.create(
+        model=MODEL_CHAT, max_tokens=1200,
         messages=[{"role": "user", "content": prompt}],
     )
-    text = response.content[0].text.strip()
-
-    bullets = ""
-    cover_letter = ""
+    text = resp.content[0].text.strip()
+    bullets, cover = "", ""
     if "COVER_LETTER:" in text:
-        parts = text.split("COVER_LETTER:")
+        parts = text.split("COVER_LETTER:", 1)
         bullets = parts[0].replace("TAILORED_BULLETS:", "").strip()
-        cover_letter = parts[1].strip()
+        cover = parts[1].strip()
     else:
         bullets = text
-
-    return {"tailored_bullets": bullets, "cover_letter": cover_letter}
+    return {"tailored_bullets": bullets, "cover_letter": cover}
 
 
 def chat(messages: list) -> str:
-    """Conversational agent with Sam's profile as system context."""
-    system = f"""You are a dedicated job search assistant helping Samantha Shenker find a job in finance and investor relations.
+    system = f"""You are a dedicated job search assistant for Samantha Shenker.
 
-SAMANTHA'S PROFILE:
 {PROFILE_SUMMARY}
 
 FULL RESUME:
 {RESUME}
 
-You help Samantha by:
-- Answering questions about her job search strategy
-- Suggesting which roles to prioritize and why
-- Helping her prepare for interviews
-- Advising on how to position her experience
-- Helping craft emails, LinkedIn messages, and follow-ups
-- Reviewing job descriptions she pastes and giving honest fit assessments
+You help Sam by:
+- Answering questions about job search strategy and which roles to prioritize
+- Giving honest assessments of job descriptions she pastes
+- Helping with interview prep and how to tell her story
+- Writing outreach emails, LinkedIn messages, and follow-ups
+- Explaining what to highlight for specific types of firms (PE vs VC vs real estate vs climate)
 
-Be warm, direct, and encouraging. Give specific, actionable advice."""
+Be direct, warm, and specific. Use her actual numbers ($10M raise, 100+ meetings, 150+ CRM contacts, 25+ data rooms) when relevant."""
 
-    response = client.messages.create(
-        model=MODEL,
-        max_tokens=800,
-        system=system,
-        messages=messages,
+    resp = client.messages.create(
+        model=MODEL_CHAT, max_tokens=900,
+        system=system, messages=messages,
     )
-    return response.content[0].text
+    return resp.content[0].text

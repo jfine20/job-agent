@@ -1,291 +1,568 @@
+"""
+Multi-source job scraper for Samantha Shenker's job search.
+Sources: LinkedIn, eFinancialCareers, Built In NYC, Wellfound, Greenhouse ATS, Lever ATS, Indeed
+"""
 import asyncio
 import hashlib
 import re
 from typing import List, Dict
+from urllib.parse import quote_plus
 
 import httpx
 from bs4 import BeautifulSoup
 
-# --- Keywords used to filter relevant jobs across all sources ---
-KEYWORDS = [
-    "investor relations", "capital formation", "fundraising", "lp relations",
-    "capital markets", "fund operations", "investor services", "client service",
-    "business development", "venture capital", "private equity", "real estate",
-    "alternatives", "asset management", "wealth management", "family office",
-    "climate", "environmental", "esg", "sustainability", "carbon",
-]
+# ─── Relevance filters ────────────────────────────────────────────────────────
 
 TITLE_KEYWORDS = [
     "investor relations", "capital formation", "fundraising", "ir associate",
     "ir analyst", "capital markets", "fund operations", "client service",
     "business development", "vc platform", "lp relations", "alternatives",
-    "investor services", "portfolio", "stakeholder",
+    "investor services", "chief of staff", "executive operations",
+    "operations associate", "investment associate", "relationship manager",
+    "portfolio associate", "stakeholder relations", "fund associate",
+    "investor experience", "shareholder", "fund development",
+]
+
+BODY_KEYWORDS = [
+    "investor relations", "capital formation", "fundraising", "lp relations",
+    "capital markets", "fund operations", "investor services", "client service",
+    "venture capital", "private equity", "real estate investment", "alternatives",
+    "asset management", "wealth management", "family office", "hedge fund",
+    "climate", "esg", "sustainability", "carbon markets", "crm", "due diligence",
+    "pitch deck", "data room", "investor outreach", "pipeline management",
+    "docsend", "hubspot", "salesforce", "investment management",
 ]
 
 SEARCH_QUERIES = [
-    "investor relations associate New York",
-    "investor relations analyst New York",
-    "capital formation associate New York",
-    "fundraising associate finance New York",
-    "real estate investor relations New York",
-    "client service associate finance New York",
-    "vc platform associate New York",
-    "business development associate private equity New York",
-    "fund operations associate New York",
-    "capital markets associate New York",
-    "climate finance associate New York",
-    "ESG associate investor relations New York",
+    "investor relations associate",
+    "investor relations analyst",
+    "capital formation associate",
+    "fundraising associate finance",
+    "IR associate private equity",
+    "client service associate alternatives",
+    "fund operations associate",
+    "investor relations coordinator",
+    "chief of staff venture capital",
+    "operations associate private equity",
+    "ESG investor relations associate",
+    "real estate investor relations associate",
+    "LP relations associate",
+    "capital markets associate",
+    "business development associate private equity",
+    "investor experience associate",
 ]
 
-# Greenhouse ATS — public JSON API, no auth needed
-# Format: (display_name, greenhouse_board_token)
+def _id(s: str) -> str:
+    return hashlib.md5(s.encode()).hexdigest()[:16]
+
+def _is_relevant(title: str, desc: str = "") -> bool:
+    t = title.lower()
+    d = desc.lower()[:5000]
+    if any(k in t for k in TITLE_KEYWORDS):
+        return True
+    hits = sum(1 for k in BODY_KEYWORDS if k in d)
+    return hits >= 2
+
+def _normalize(raw: Dict) -> Dict:
+    raw.setdefault("salary_range", None)
+    raw.setdefault("company_type", None)
+    return raw
+
+
+# ─── Source 1: Greenhouse public ATS API ─────────────────────────────────────
+
 GREENHOUSE_COMPANIES = [
-    # Private equity / alternatives
+    # PE / Private Credit / Alternatives
     ("Apollo Global Management", "apollo"),
-    ("Carlyle Group", "carlyle"),
     ("Ares Management", "aresmgmt"),
     ("Blue Owl Capital", "blueowl"),
     ("Hamilton Lane", "hamiltonlane"),
     ("Golub Capital", "golubcapital"),
-    ("Owl Rock", "owlrock"),
     ("Blackstone", "blackstone"),
     ("iCapital", "icapital"),
+    ("iCapital Network", "icapitalnetwork"),
     ("Neuberger Berman", "neubergerberman"),
-    # Real estate
+    ("CAIS", "cais"),
+    ("Benefit Street Partners", "benefitstreetpartners"),
+    ("General Atlantic", "generalatlantic"),
+    ("Summit Partners", "summitpartners"),
+    ("Warburg Pincus", "warburgpincus"),
+    ("Insight Partners", "insightpartners"),
+    ("Vista Equity Partners", "vistaequitypartners"),
+    ("Advent International", "advent"),
+    ("Bain Capital", "baincapital"),
+    ("Veritas Capital", "veritascapital"),
+    ("Stone Point Capital", "stonepoint"),
+    ("GTCR", "gtcr"),
+    ("TA Associates", "ta"),
+    ("Francisco Partners", "franciscopartners"),
+    ("Leonard Green Partners", "lgp"),
+    ("Antares Capital", "antarescapital"),
+    ("Owl Rock Capital", "owlrock"),
+    ("Monroe Capital", "monroecapital"),
+    ("WhiteHorse Capital", "whitehorsecapital"),
+    ("Twin Brook Capital", "twinbrook"),
+    # Real Estate
     ("Greystar", "greystar"),
-    ("Nuveen", "nuveen"),
-    ("Brookfield Asset Management", "brookfield"),
     ("Hines", "hines"),
     ("RXR Realty", "rxr"),
+    ("Brookfield Asset Management", "brookfield"),
+    ("Tishman Speyer", "tishmanspey"),
+    ("JLL", "jll"),
+    ("CBRE", "cbre"),
+    ("Cushman & Wakefield", "cushwake"),
+    ("Compass", "compass"),
+    ("Oxford Properties", "oxford"),
+    ("Nuveen Real Estate", "nuveen"),
+    ("MetLife Investment Management", "metlife"),
+    ("Rockpoint Group", "rockpoint"),
+    ("BentallGreenOak", "bentallgreenoak"),
     # Climate / ESG / Environmental
     ("Generate Capital", "generatecapital"),
     ("Fifth Wall", "fifthwall"),
-    ("Aligned Climate Capital", "alignedclimatecapital"),
-    ("Prelude Ventures", "preludeventures"),
     ("Breakthrough Energy", "breakthroughenergy"),
     ("ClimateAI", "climateai"),
-    ("Climeworks", "climeworks"),
     ("Carbon Direct", "carbondirect"),
     ("Pachama", "pachama"),
-    # VC / Growth
-    ("General Atlantic", "generalatlantic"),
-    ("Tiger Global", "tigerglobal"),
-    ("Insight Partners", "insightpartners"),
-    ("Summit Partners", "summitpartners"),
-    ("Warburg Pincus", "warburgpincus"),
-    ("Vista Equity Partners", "vistaequitypartners"),
-    # IR-adjacent
-    ("iCapital Network", "icapitalnetwork"),
+    ("Intersect Power", "intersectpower"),
+    ("Arcadia", "arcadia"),
+    ("Invenergy", "invenergy"),
+    ("Nexamp", "nexamp"),
+    ("Sunrun", "sunrun"),
+    ("CleanCapital", "cleancapital"),
+    ("Greenbacker Capital", "greenbackercapital"),
+    ("Hannon Armstrong", "hannonarmstrong"),
+    ("Energize Capital", "energizecapital"),
+    ("Generate Capital", "generate"),
+    # Alt Investment Platforms / IR Tech
     ("Addepar", "addepar"),
     ("Carta", "carta"),
     ("Broadridge", "broadridge"),
-    ("SS&C Technologies", "ssctechnologies"),
     ("Preqin", "preqin"),
     ("PitchBook", "pitchbook"),
+    ("Yieldstreet", "yieldstreet"),
+    ("Republic", "republic"),
+    ("Fundrise", "fundrise"),
+    ("Percent", "percent"),
+    ("MSCI", "msci"),
+    ("FactSet", "factset"),
+    ("Donnelley Financial Solutions", "dfsco"),
+    ("Ipreo", "ipreo"),
+    # Asset Management
+    ("PGIM", "pgim"),
+    ("Lord Abbett", "lordabbett"),
+    ("Pimco", "pimco"),
+    ("BlackRock", "blackrock"),
+    ("AllianceBernstein", "alliancebernstein"),
+    ("Voya Financial", "voya"),
+    ("Franklin Templeton", "franklintempleton"),
+    ("Lazard Asset Management", "lazard"),
+    ("Silvercrest Asset Management", "silvercrest"),
+    ("Manning & Napier", "manningnapier"),
+    # Wealth / Family Office
+    ("Rockefeller Capital Management", "rockefellercapital"),
+    ("Glenmede", "glenmede"),
+    ("Fiduciary Trust", "fiduciarytrust"),
+    ("Bernstein Private Wealth", "bernstein"),
+    ("Silvercrest", "silvercrest"),
 ]
 
-# Lever ATS — public JSON API, no auth needed
-# Format: (display_name, lever_slug)
+async def scrape_greenhouse(companies: List[tuple]) -> List[Dict]:
+    jobs = []
+    async with httpx.AsyncClient(timeout=12, follow_redirects=True) as client:
+        for name, token in companies:
+            try:
+                r = await client.get(
+                    f"https://boards-api.greenhouse.io/v1/boards/{token}/jobs?content=true"
+                )
+                if r.status_code != 200:
+                    continue
+                for job in r.json().get("jobs", []):
+                    title = job.get("title", "")
+                    location = job.get("location", {}).get("name", "")
+                    loc_l = location.lower()
+                    if location and not any(x in loc_l for x in ("new york", " ny,", "remote", "united states", "anywhere")):
+                        continue
+                    desc = BeautifulSoup(job.get("content", ""), "lxml").get_text()[:5000]
+                    if not _is_relevant(title, desc):
+                        continue
+                    jobs.append(_normalize({
+                        "external_id": f"gh_{job.get('id', _id(title+name))}",
+                        "title": title, "company": name,
+                        "location": location or "New York, NY",
+                        "description": desc,
+                        "apply_url": job.get("absolute_url", ""),
+                        "source": "greenhouse",
+                    }))
+                await asyncio.sleep(0.15)
+            except Exception:
+                pass
+    print(f"Greenhouse: {len(jobs)} relevant jobs")
+    return jobs
+
+
+# ─── Source 2: Lever public ATS API ──────────────────────────────────────────
+
 LEVER_COMPANIES = [
-    ("Blackstone", "blackstone"),
     ("KKR", "kkr"),
-    ("Two Sigma", "twosigma"),
-    ("D.E. Shaw", "deshaw"),
-    ("Bridgewater Associates", "bridgewater"),
+    ("Carlyle Group", "carlyle"),
+    ("Bridgewater Associates", "bridgewaterassociates"),
     ("Point72", "point72"),
     ("Citadel", "citadel"),
     ("Millennium Management", "millennium"),
     ("Coatue Management", "coatue"),
-    ("Tiger Management", "tiger"),
+    ("Two Sigma", "twosigma"),
+    ("D.E. Shaw", "deshaw"),
+    ("Sculptor Capital", "sculptor"),
+    ("Silver Lake", "silverlake"),
+    ("Thoma Bravo", "thomabravo"),
     ("Bessemer Venture Partners", "bvp"),
     ("Andreessen Horowitz", "a16z"),
-    ("Sequoia Capital", "sequoiacap"),
     ("Accel", "accel"),
     ("Lightspeed", "lightspeedvp"),
+    ("Tiger Global", "tigerglobal"),
+    ("General Catalyst", "generalcatalyst"),
     ("Canapi Ventures", "canapi"),
-    ("Generate Capital", "generate"),
     ("Energy Impact Partners", "energyimpact"),
-    ("Breakthrough Energy Ventures", "bev"),
     ("Lowercarbon Capital", "lowercarbon"),
-    ("Climate Fund Managers", "climatefundmanagers"),
-    ("BlueTriton Brands", "bluetriton"),
-    ("Sustainable Development Capital", "sdcl"),
+    ("Galvanize Climate Solutions", "galvanizeclimate"),
+    ("Congruent Ventures", "congruent"),
+    ("Prelude Ventures", "preludeventures"),
+    ("DBL Partners", "dbl"),
+    ("Related Companies", "related"),
+    ("Slate Property Group", "slate"),
+    ("Mack Real Estate", "mackrealestate"),
+    ("Brookfield Properties", "brookfieldproperties"),
+    ("Envestnet", "envestnet"),
+    ("Morningstar", "morningstar"),
+    ("Orion Advisor Solutions", "orionadvisor"),
 ]
 
-
-def _make_id(text: str) -> str:
-    return hashlib.md5(text.encode()).hexdigest()
-
-
-def _is_relevant(title: str, description: str) -> bool:
-    title_lower = title.lower()
-    desc_lower = (description or "").lower()[:2000]
-    if any(kw in title_lower for kw in TITLE_KEYWORDS):
-        return True
-    if any(kw in title_lower for kw in KEYWORDS):
-        return True
-    keyword_hits = sum(1 for kw in KEYWORDS if kw in desc_lower)
-    return keyword_hits >= 3
-
-
-# --- Source 1: Indeed (Playwright) ---
-async def scrape_indeed(queries: List[str]) -> List[Dict]:
-    from playwright.async_api import async_playwright
-
+async def scrape_lever(companies: List[tuple]) -> List[Dict]:
     jobs = []
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            viewport={"width": 1280, "height": 800},
-        )
-        page = await context.new_page()
+    async with httpx.AsyncClient(timeout=12, follow_redirects=True) as client:
+        for name, slug in companies:
+            try:
+                r = await client.get(f"https://api.lever.co/v0/postings/{slug}?mode=json")
+                if r.status_code != 200:
+                    continue
+                for job in r.json():
+                    title = job.get("text", "")
+                    location = job.get("categories", {}).get("location", "")
+                    loc_l = location.lower()
+                    if location and not any(x in loc_l for x in ("new york", " ny", "remote", "united states", "anywhere")):
+                        continue
+                    desc = BeautifulSoup(
+                        job.get("descriptionPlain") or job.get("description", ""), "lxml"
+                    ).get_text()[:5000]
+                    if not _is_relevant(title, desc):
+                        continue
+                    jobs.append(_normalize({
+                        "external_id": f"lever_{job.get('id', _id(title+name))}",
+                        "title": title, "company": name,
+                        "location": location or "New York, NY",
+                        "description": desc,
+                        "apply_url": job.get("hostedUrl", ""),
+                        "source": "lever",
+                    }))
+                await asyncio.sleep(0.15)
+            except Exception:
+                pass
+    print(f"Lever: {len(jobs)} relevant jobs")
+    return jobs
 
+
+# ─── Sources 3-7: Playwright (LinkedIn, eFC, Wellfound, Built In, Indeed) ─────
+
+async def scrape_playwright_sources(queries: List[str]) -> List[Dict]:
+    from playwright.async_api import async_playwright
+    jobs = []
+
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-blink-features=AutomationControlled"],
+        )
+        ctx = await browser.new_context(
+            user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+            viewport={"width": 1440, "height": 900},
+            locale="en-US",
+            timezone_id="America/New_York",
+        )
+        await ctx.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+            window.chrome = { runtime: {} };
+        """)
+
+        jobs += await _linkedin(ctx, queries[:8])
+        jobs += await _efinancialcareers(ctx, queries[:5])
+        jobs += await _wellfound(ctx, queries[:4])
+        jobs += await _builtin(ctx, queries[:3])
+        jobs += await _indeed(ctx, queries[:6])
+
+        await browser.close()
+
+    print(f"Playwright total: {len(jobs)} jobs")
+    return jobs
+
+
+async def _linkedin(ctx, queries: List[str]) -> List[Dict]:
+    jobs = []
+    page = await ctx.new_page()
+    try:
         for query in queries:
             try:
-                url = f"https://www.indeed.com/jobs?q={query.replace(' ', '+')}&l=New+York%2C+NY&sort=date&fromage=14"
-                await page.goto(url, wait_until="domcontentloaded", timeout=20000)
-                await page.wait_for_timeout(2000)
-                content = await page.content()
-                soup = BeautifulSoup(content, "lxml")
+                # f_TPR=r1209600 = last 2 weeks; sortBy=DD = date descending
+                url = (
+                    f"https://www.linkedin.com/jobs/search/"
+                    f"?keywords={quote_plus(query)}"
+                    f"&location=New+York%2C+New+York%2C+United+States"
+                    f"&f_TPR=r1209600&sortBy=DD"
+                )
+                await page.goto(url, wait_until="domcontentloaded", timeout=25000)
+                await page.wait_for_timeout(3000)
 
-                cards = soup.select("div.job_seen_beacon, div[data-testid='jobsearch-SerpJobCard']")
-                if not cards:
-                    cards = soup.select("div.tapItem, div.slider_item")
+                if "authwall" in page.url or "checkpoint" in page.url:
+                    print(f"LinkedIn: auth wall hit, skipping")
+                    break
 
-                for card in cards[:15]:
-                    title_el = card.select_one("h2.jobTitle span, h2 a span, a[data-jk] span")
-                    company_el = card.select_one("span[data-testid='company-name'], span.companyName")
-                    location_el = card.select_one("div[data-testid='text-location'], div.companyLocation")
-                    link_el = card.select_one("a[id^='job_'], a[data-jk], h2 a")
+                # Scroll to load more cards
+                for _ in range(5):
+                    await page.evaluate("window.scrollBy(0, 600)")
+                    await page.wait_for_timeout(600)
+
+                soup = BeautifulSoup(await page.content(), "lxml")
+                cards = soup.select("div.base-card, li.result-card, div[data-entity-urn]")
+
+                for card in cards[:25]:
+                    title_el = card.select_one("h3.base-search-card__title, h3[class*='title'], span[class*='title']")
+                    company_el = card.select_one("h4.base-search-card__subtitle, a[class*='company'], span[class*='company']")
+                    location_el = card.select_one("span.job-search-card__location, span[class*='location']")
+                    link_el = card.select_one("a.base-card__full-link, a[href*='/jobs/view/']")
 
                     title = title_el.get_text(strip=True) if title_el else ""
                     company = company_el.get_text(strip=True) if company_el else ""
                     location = location_el.get_text(strip=True) if location_el else "New York, NY"
-                    href = link_el.get("href", "") if link_el else ""
-                    apply_url = f"https://www.indeed.com{href}" if href.startswith("/") else href
-                    jk = re.search(r"jk=([a-f0-9]+)", apply_url)
-                    job_key = jk.group(1) if jk else _make_id(title + company)
+                    href = (link_el.get("href") or "").split("?")[0] if link_el else ""
 
-                    if not title or not company:
-                        continue
-                    if not _is_relevant(title, ""):
+                    if not title or not company or not _is_relevant(title):
                         continue
 
-                    jobs.append({
-                        "external_id": f"indeed_{job_key}",
-                        "title": title,
-                        "company": company,
-                        "location": location,
-                        "description": f"Found via Indeed search: {query}",
-                        "apply_url": apply_url,
-                        "source": "indeed",
-                    })
+                    jobs.append(_normalize({
+                        "external_id": f"li_{_id(title+company+href[:30])}",
+                        "title": title, "company": company, "location": location,
+                        "description": f"LinkedIn: {title} at {company}. Found via: '{query}'.",
+                        "apply_url": href, "source": "linkedin",
+                    }))
+
+                await page.wait_for_timeout(2000)
+            except Exception as e:
+                print(f"LinkedIn '{query}': {e}")
+    finally:
+        await page.close()
+    print(f"LinkedIn: {len(jobs)} jobs")
+    return jobs
+
+
+async def _efinancialcareers(ctx, queries: List[str]) -> List[Dict]:
+    jobs = []
+    page = await ctx.new_page()
+    try:
+        for query in queries:
+            try:
+                url = f"https://www.efinancialcareers.com/search?q={quote_plus(query)}&location=New+York&radius=25"
+                await page.goto(url, wait_until="domcontentloaded", timeout=20000)
+                await page.wait_for_timeout(3000)
+
+                soup = BeautifulSoup(await page.content(), "lxml")
+
+                # Try multiple card selectors
+                cards = (
+                    soup.select("article[data-job-id]") or
+                    soup.select("[class*='JobCard']") or
+                    soup.select("div[class*='job-card']") or
+                    soup.select("li[class*='job-item']")
+                )
+
+                for card in cards[:25]:
+                    title_el = (
+                        card.select_one("[class*='job-title'], [class*='jobTitle'], h2 a, h3 a") or
+                        card.select_one("h2, h3")
+                    )
+                    company_el = card.select_one("[class*='company'], [class*='employer'], [class*='Company']")
+                    location_el = card.select_one("[class*='location'], [class*='Location']")
+                    link_el = card.select_one("a[href*='/jobs/'], a[href*='/job/']") or card.select_one("a")
+
+                    title = title_el.get_text(strip=True) if title_el else ""
+                    company = company_el.get_text(strip=True) if company_el else ""
+                    location = location_el.get_text(strip=True) if location_el else "New York, NY"
+                    href = (link_el.get("href") or "") if link_el else ""
+                    apply_url = f"https://www.efinancialcareers.com{href}" if href.startswith("/") else href
+
+                    if not title or len(title) < 4 or not _is_relevant(title):
+                        continue
+
+                    jobs.append(_normalize({
+                        "external_id": f"efc_{_id(title+company)}",
+                        "title": title, "company": company, "location": location,
+                        "description": f"eFinancialCareers: {title} at {company}. Search: '{query}'.",
+                        "apply_url": apply_url, "source": "efinancialcareers",
+                    }))
 
                 await page.wait_for_timeout(1500)
             except Exception as e:
-                print(f"Indeed error for '{query}': {e}")
-
-        await browser.close()
-
-    print(f"Indeed: found {len(jobs)} jobs")
+                print(f"eFC '{query}': {e}")
+    finally:
+        await page.close()
+    print(f"eFinancialCareers: {len(jobs)} jobs")
     return jobs
 
 
-# --- Source 2: Greenhouse public ATS API ---
-async def scrape_greenhouse(companies: List[tuple]) -> List[Dict]:
+async def _wellfound(ctx, queries: List[str]) -> List[Dict]:
     jobs = []
-    async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-        for company_name, token in companies:
+    page = await ctx.new_page()
+    try:
+        for query in queries[:4]:
             try:
-                url = f"https://boards-api.greenhouse.io/v1/boards/{token}/jobs?content=true"
-                resp = await client.get(url)
-                if resp.status_code != 200:
-                    continue
-                data = resp.json()
-                for job in data.get("jobs", []):
-                    title = job.get("title", "")
-                    location = job.get("location", {}).get("name", "")
-                    # Only include NY or remote jobs
-                    loc_lower = location.lower()
-                    if location and "new york" not in loc_lower and "ny" not in loc_lower and "remote" not in loc_lower:
-                        continue
-                    description = BeautifulSoup(job.get("content", ""), "lxml").get_text()[:3000]
-                    if not _is_relevant(title, description):
-                        continue
-                    jobs.append({
-                        "external_id": f"gh_{job.get('id', _make_id(title + company_name))}",
-                        "title": title,
-                        "company": company_name,
-                        "location": location or "New York, NY",
-                        "description": description,
-                        "apply_url": job.get("absolute_url", ""),
-                        "source": "greenhouse",
-                    })
-                await asyncio.sleep(0.3)
-            except Exception as e:
-                print(f"Greenhouse error for {company_name}: {e}")
+                url = f"https://wellfound.com/jobs?q={quote_plus(query)}&l=New+York+City"
+                await page.goto(url, wait_until="networkidle", timeout=25000)
+                await page.wait_for_timeout(3500)
 
-    print(f"Greenhouse: found {len(jobs)} relevant jobs")
+                soup = BeautifulSoup(await page.content(), "lxml")
+
+                for card in soup.select("[data-test='JobListing'], [class*='JobListing'], [class*='job-listing']")[:20]:
+                    title_el = card.select_one("h2, h3, [class*='title'], [class*='Title']")
+                    company_el = card.select_one("[class*='company'], [class*='Company'], [class*='startup']")
+                    link_el = card.select_one("a[href*='/jobs/']") or card.select_one("a")
+
+                    title = title_el.get_text(strip=True) if title_el else ""
+                    company = company_el.get_text(strip=True) if company_el else ""
+                    href = (link_el.get("href") or "") if link_el else ""
+                    apply_url = f"https://wellfound.com{href}" if href.startswith("/") else href
+
+                    if not title or not _is_relevant(title):
+                        continue
+
+                    jobs.append(_normalize({
+                        "external_id": f"wf_{_id(title+company)}",
+                        "title": title, "company": company, "location": "New York, NY",
+                        "description": f"Wellfound: {title} at {company}. Search: '{query}'.",
+                        "apply_url": apply_url, "source": "wellfound",
+                    }))
+
+                await page.wait_for_timeout(2000)
+            except Exception as e:
+                print(f"Wellfound '{query}': {e}")
+    finally:
+        await page.close()
+    print(f"Wellfound: {len(jobs)} jobs")
     return jobs
 
 
-# --- Source 3: Lever public ATS API ---
-async def scrape_lever(companies: List[tuple]) -> List[Dict]:
+async def _builtin(ctx, queries: List[str]) -> List[Dict]:
     jobs = []
-    async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-        for company_name, slug in companies:
+    page = await ctx.new_page()
+    try:
+        for query in queries[:3]:
             try:
-                url = f"https://api.lever.co/v0/postings/{slug}?mode=json"
-                resp = await client.get(url)
-                if resp.status_code != 200:
-                    continue
-                postings = resp.json()
-                for job in postings:
-                    title = job.get("text", "")
-                    location = job.get("categories", {}).get("location", "")
-                    loc_lower = location.lower()
-                    if location and "new york" not in loc_lower and "ny" not in loc_lower and "remote" not in loc_lower:
-                        continue
-                    description = BeautifulSoup(
-                        job.get("descriptionPlain", "") or job.get("description", ""), "lxml"
-                    ).get_text()[:3000]
-                    if not _is_relevant(title, description):
-                        continue
-                    jobs.append({
-                        "external_id": f"lever_{job.get('id', _make_id(title + company_name))}",
-                        "title": title,
-                        "company": company_name,
-                        "location": location or "New York, NY",
-                        "description": description,
-                        "apply_url": job.get("hostedUrl", ""),
-                        "source": "lever",
-                    })
-                await asyncio.sleep(0.3)
-            except Exception as e:
-                print(f"Lever error for {company_name}: {e}")
+                url = f"https://builtin.com/jobs/nyc?search={quote_plus(query)}"
+                await page.goto(url, wait_until="networkidle", timeout=25000)
+                await page.wait_for_timeout(3000)
 
-    print(f"Lever: found {len(jobs)} relevant jobs")
+                soup = BeautifulSoup(await page.content(), "lxml")
+
+                for card in soup.select("article, [data-id], [class*='JobCard'], [class*='job-card']")[:20]:
+                    title_el = card.select_one("h2, h3, [class*='title'], [class*='Title']")
+                    company_el = card.select_one("[class*='company'], [class*='Company']")
+                    link_el = card.select_one("a[href*='/job/'], a[href]")
+
+                    title = title_el.get_text(strip=True) if title_el else ""
+                    company = company_el.get_text(strip=True) if company_el else ""
+                    href = (link_el.get("href") or "") if link_el else ""
+                    apply_url = f"https://builtin.com{href}" if href.startswith("/") else href
+
+                    if not title or not _is_relevant(title):
+                        continue
+
+                    jobs.append(_normalize({
+                        "external_id": f"bi_{_id(title+company)}",
+                        "title": title, "company": company, "location": "New York, NY",
+                        "description": f"Built In NYC: {title} at {company}.",
+                        "apply_url": apply_url, "source": "builtin",
+                    }))
+
+                await page.wait_for_timeout(2000)
+            except Exception as e:
+                print(f"Built In '{query}': {e}")
+    finally:
+        await page.close()
+    print(f"Built In NYC: {len(jobs)} jobs")
     return jobs
 
+
+async def _indeed(ctx, queries: List[str]) -> List[Dict]:
+    jobs = []
+    page = await ctx.new_page()
+    try:
+        for query in queries:
+            try:
+                url = f"https://www.indeed.com/jobs?q={quote_plus(query)}&l=New+York%2C+NY&sort=date&fromage=14"
+                await page.goto(url, wait_until="domcontentloaded", timeout=20000)
+                await page.wait_for_timeout(2500)
+
+                soup = BeautifulSoup(await page.content(), "lxml")
+
+                for card in soup.select("div.job_seen_beacon, div.tapItem, [data-testid='jobsearch-SerpJobCard']")[:15]:
+                    title_el = card.select_one("h2.jobTitle span, a[data-jk] span, [class*='jobTitle'] span")
+                    company_el = card.select_one("[data-testid='company-name'], span.companyName")
+                    location_el = card.select_one("[data-testid='text-location'], div.companyLocation")
+                    link_el = card.select_one("a[data-jk], h2 a, a[id^='job_']")
+
+                    title = title_el.get_text(strip=True) if title_el else ""
+                    company = company_el.get_text(strip=True) if company_el else ""
+                    location = location_el.get_text(strip=True) if location_el else "New York, NY"
+                    href = (link_el.get("href") or "") if link_el else ""
+                    apply_url = f"https://www.indeed.com{href}" if href.startswith("/") else href
+
+                    if not title or not company or not _is_relevant(title):
+                        continue
+
+                    jk_match = re.search(r"jk=([a-f0-9]+)", apply_url)
+                    job_key = jk_match.group(1) if jk_match else _id(title + company)
+
+                    jobs.append(_normalize({
+                        "external_id": f"indeed_{job_key}",
+                        "title": title, "company": company, "location": location,
+                        "description": f"Indeed: {title} at {company}. Search: '{query}'.",
+                        "apply_url": apply_url, "source": "indeed",
+                    }))
+
+                await page.wait_for_timeout(1500)
+            except Exception as e:
+                print(f"Indeed '{query}': {e}")
+    finally:
+        await page.close()
+    print(f"Indeed: {len(jobs)} jobs")
+    return jobs
+
+
+# ─── Main entry point ─────────────────────────────────────────────────────────
 
 async def scrape_all_jobs() -> List[Dict]:
     greenhouse_task = scrape_greenhouse(GREENHOUSE_COMPANIES)
     lever_task = scrape_lever(LEVER_COMPANIES)
-    indeed_task = scrape_indeed(SEARCH_QUERIES[:6])  # first 6 queries for speed
+    playwright_task = scrape_playwright_sources(SEARCH_QUERIES)
 
-    greenhouse_jobs, lever_jobs, indeed_jobs = await asyncio.gather(
-        greenhouse_task, lever_task, indeed_task
-    )
+    gh, lv, pw = await asyncio.gather(greenhouse_task, lever_task, playwright_task)
 
-    all_jobs = greenhouse_jobs + lever_jobs + indeed_jobs
+    all_jobs = gh + lv + pw
 
-    # Deduplicate by external_id
-    seen = set()
+    seen: set = set()
     unique = []
     for job in all_jobs:
-        if job["external_id"] not in seen:
-            seen.add(job["external_id"])
+        eid = job.get("external_id", "")
+        if eid and eid not in seen and job.get("title"):
+            seen.add(eid)
             unique.append(job)
 
     print(f"Total unique jobs scraped: {len(unique)}")
