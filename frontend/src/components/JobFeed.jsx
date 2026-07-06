@@ -42,7 +42,14 @@ function JobCard({ job, onTrack }) {
       <div className="flex items-start justify-between gap-2">
         <div className="flex-1 min-w-0">
           <h3 className="font-semibold text-gray-900 truncate">{job.title}</h3>
-          <p className="text-sm text-gray-600">{job.company} · {job.location}</p>
+          <div className="flex items-center gap-2 flex-wrap">
+            <p className="text-sm text-gray-600">{job.company} · {job.location}</p>
+            {job.source && (
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${SOURCE_COLORS[job.source] || "bg-gray-100 text-gray-600"}`}>
+                {job.source}
+              </span>
+            )}
+          </div>
         </div>
         <ScoreBadge score={job.fit_score} />
       </div>
@@ -105,11 +112,19 @@ function JobCard({ job, onTrack }) {
   );
 }
 
+const SOURCE_COLORS = {
+  greenhouse: "bg-green-100 text-green-700",
+  lever: "bg-blue-100 text-blue-700",
+  indeed: "bg-orange-100 text-orange-700",
+};
+
 export default function JobFeed() {
   const [jobs, setJobs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [scraping, setScraping] = useState(false);
   const [minScore, setMinScore] = useState(5);
+  const [sortBy, setSortBy] = useState("score");
+  const [filterSource, setFilterSource] = useState("all");
   const [tracked, setTracked] = useState(null);
 
   const fetchJobs = async () => {
@@ -124,13 +139,30 @@ export default function JobFeed() {
 
   useEffect(() => { fetchJobs(); }, [minScore]);
 
+  const sortedJobs = [...jobs]
+    .filter(j => filterSource === "all" || j.source === filterSource)
+    .sort((a, b) => {
+      if (sortBy === "score") return (b.fit_score || 0) - (a.fit_score || 0);
+      if (sortBy === "date") return new Date(b.scraped_at) - new Date(a.scraped_at);
+      if (sortBy === "company") return a.company.localeCompare(b.company);
+      return 0;
+    });
+
   const triggerScrape = async () => {
     setScraping(true);
     await fetch(`${API}/api/jobs/scrape`, { method: "POST" });
-    setTimeout(() => {
-      setScraping(false);
-      fetchJobs();
+    // Scrape takes ~60s, poll until count grows
+    const start = jobs.length;
+    const poll = setInterval(async () => {
+      const res = await fetch(`${API}/api/jobs?min_score=${minScore}`);
+      const data = await res.json();
+      if (data.length > start) {
+        setJobs(data);
+        setScraping(false);
+        clearInterval(poll);
+      }
     }, 5000);
+    setTimeout(() => { setScraping(false); clearInterval(poll); fetchJobs(); }, 120000);
   };
 
   const trackJob = async (job) => {
@@ -152,18 +184,25 @@ export default function JobFeed() {
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
-        <div className="flex items-center gap-3">
-          <label className="text-sm font-medium text-gray-700">Min fit score:</label>
-          <select
-            value={minScore}
-            onChange={(e) => setMinScore(Number(e.target.value))}
-            className="text-sm border border-gray-300 rounded px-2 py-1"
-          >
-            {[0, 3, 5, 7, 8].map((v) => (
-              <option key={v} value={v}>{v}+</option>
-            ))}
+        <div className="flex items-center gap-3 flex-wrap">
+          <label className="text-sm font-medium text-gray-700">Min score:</label>
+          <select value={minScore} onChange={(e) => setMinScore(Number(e.target.value))} className="text-sm border border-gray-300 rounded px-2 py-1">
+            {[0, 3, 5, 7, 8].map((v) => <option key={v} value={v}>{v}+</option>)}
           </select>
-          <span className="text-sm text-gray-500">{jobs.length} jobs</span>
+          <label className="text-sm font-medium text-gray-700">Sort:</label>
+          <select value={sortBy} onChange={(e) => setSortBy(e.target.value)} className="text-sm border border-gray-300 rounded px-2 py-1">
+            <option value="score">Best fit</option>
+            <option value="date">Newest</option>
+            <option value="company">Company A-Z</option>
+          </select>
+          <label className="text-sm font-medium text-gray-700">Source:</label>
+          <select value={filterSource} onChange={(e) => setFilterSource(e.target.value)} className="text-sm border border-gray-300 rounded px-2 py-1">
+            <option value="all">All</option>
+            <option value="greenhouse">Greenhouse</option>
+            <option value="lever">Lever</option>
+            <option value="indeed">Indeed</option>
+          </select>
+          <span className="text-sm text-gray-500">{sortedJobs.length} jobs</span>
         </div>
         <button
           onClick={triggerScrape}
@@ -188,7 +227,7 @@ export default function JobFeed() {
         </div>
       ) : (
         <div className="space-y-3">
-          {jobs.map((job) => (
+          {sortedJobs.map((job) => (
             <JobCard key={job.id} job={job} onTrack={trackJob} />
           ))}
         </div>
