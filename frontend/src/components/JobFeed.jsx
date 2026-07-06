@@ -182,7 +182,8 @@ export default function JobFeed() {
     setLoading(true);
     try {
       const params = new URLSearchParams({ min_score: minScore });
-      if (filterSource !== "all") params.set("source", filterSource);
+      // "company" is a group — handled client-side below
+      if (filterSource !== "all" && filterSource !== "company") params.set("source", filterSource);
       if (filterType !== "all") params.set("company_type", filterType);
       if (filterSeniority !== "all") params.set("seniority", filterSeniority);
       const [jobsRes, statsRes] = await Promise.all([
@@ -233,7 +234,10 @@ export default function JobFeed() {
     setJobs(prev => prev.filter(j => j.id !== id));
   };
 
+  const COMPANY_SOURCES = ["workday", "direct", "google_jobs", "greenhouse", "lever"];
+
   const sorted = [...jobs]
+    .filter(j => filterSource !== "company" || COMPANY_SOURCES.includes(j.source))
     .filter(j => !showNew || j.is_new)
     .sort((a, b) => {
       if (sortBy === "score") return (b.fit_score || 0) - (a.fit_score || 0);
@@ -277,14 +281,17 @@ export default function JobFeed() {
           <label className="text-xs font-medium text-gray-600">Source</label>
           <select value={filterSource} onChange={e => setFilterSource(e.target.value)} className="text-sm border border-gray-300 rounded-lg px-2 py-1">
             <option value="all">All sources</option>
-            <option value="greenhouse">Greenhouse</option>
-            <option value="lever">Lever</option>
+            <option value="company">Company Sites (Workday + Direct)</option>
+            <option value="greenhouse">Greenhouse ATS</option>
+            <option value="lever">Lever ATS</option>
+            <option value="workday">Workday ATS</option>
             <option value="linkedin">LinkedIn</option>
             <option value="efinancialcareers">eFinancial</option>
             <option value="wellfound">Wellfound</option>
-            <option value="builtin">Built In</option>
+            <option value="builtin">Built In NYC</option>
             <option value="indeed">Indeed</option>
-            <option value="direct">Company Sites</option>
+            <option value="google_jobs">Google Jobs</option>
+            <option value="direct">Direct Scrape</option>
           </select>
         </div>
         <div className="flex items-center gap-1.5">

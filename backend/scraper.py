@@ -113,6 +113,7 @@ GREENHOUSE_COMPANIES = [
     ("GTCR", "gtcr"),
     ("TA Associates", "ta"),
     ("Francisco Partners", "franciscopartners"),
+    ("TPG Capital", "tpgcareers"),
     ("Leonard Green Partners", "lgp"),
     ("Antares Capital", "antarescapital"),
     ("Owl Rock Capital", "owlrock"),
@@ -189,29 +190,26 @@ GREENHOUSE_COMPANIES = [
 # Format: (display_name, workday_tenant, site_id)
 
 WORKDAY_COMPANIES = [
-    ("Blackstone",           "blackstone",     "Blackstone_Careers"),
-    ("KKR",                  "kkr",            "KKR_Careers"),
-    ("Carlyle Group",        "carlyle",        "External"),
-    ("Apollo Global",        "apollo",         "External"),
-    ("JPMorgan",             "jpmc",           "External"),
-    ("Goldman Sachs",        "goldmansachs",   "External_Career_Site"),
-    ("Morgan Stanley",       "morganstanley",  "External"),
-    ("Lazard",               "lazard",         "External"),
-    ("Brookfield",           "brookfield",     "External"),
-    ("Vornado Realty",       "vno",            "External"),
-    ("Boston Properties",    "bxp",            "External"),
-    ("CBRE",                 "cbre",           "External"),
-    ("JLL",                  "jll",            "jllcareers"),
-    ("Northern Trust",       "northerntrust",  "External"),
-    ("Franklin Templeton",   "franklintempleton", "External"),
-    ("AllianceBernstein",    "alliancebernstein", "External"),
-    ("Nuveen",               "nuveen",         "External"),
-    ("Pimco",                "pimco",          "External"),
-    ("PGIM",                 "pgim",           "External"),
-    ("Voya Financial",       "voya",           "External"),
-    ("Hines",                "hines",          "External"),
-    ("Greystar",             "greystar",       "External"),
-    ("Cushman & Wakefield",  "cushwake",       "External"),
+    # Confirmed working — tested directly
+    ("Blackstone",           "blackstone",     "wd5", "Blackstone_Careers"),
+    ("Morgan Stanley",       "ms",             "wd5", "External"),
+    ("Oaktree Capital",      "oaktree",        "wd1", "oaktree"),
+    ("JLL",                  "jll",            "wd1", "jllcareers"),
+    # Likely Workday — broad searches will catch relevant roles
+    ("JPMorgan",             "jpmc",           "wd5", "External"),
+    ("Brookfield",           "brookfield",     "wd5", "External"),
+    ("Vornado Realty",       "vno",            "wd5", "External"),
+    ("Boston Properties",    "bxp",            "wd5", "External"),
+    ("CBRE",                 "cbre",           "wd5", "External"),
+    ("Northern Trust",       "northerntrust",  "wd1", "External"),
+    ("Franklin Templeton",   "franklintempleton","wd5","External"),
+    ("AllianceBernstein",    "alliancebernstein","wd5","External"),
+    ("Nuveen",               "nuveen",         "wd5", "External"),
+    ("Voya Financial",       "voya",           "wd5", "External"),
+    ("Hines",                "hines",          "wd5", "External"),
+    ("Greystar",             "greystar",       "wd5", "External"),
+    ("Cushman & Wakefield",  "cushwake",       "wd5", "External"),
+    ("Tishman Speyer",       "tishmanspey",    "wd5", "External"),
 ]
 
 WORKDAY_SEARCH_TERMS = [
@@ -229,47 +227,85 @@ async def scrape_workday() -> List[Dict]:
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
     }
     async with httpx.AsyncClient(timeout=15, follow_redirects=True, headers=headers) as client:
-        for company, tenant, site in WORKDAY_COMPANIES:
+        for company, tenant, wd_ver, site in WORKDAY_COMPANIES:
             for term in WORKDAY_SEARCH_TERMS[:4]:
                 try:
-                    url = f"https://{tenant}.wd5.myworkdayjobs.com/wday/cxs/{tenant}/{site}/jobs"
-                    payload = {"limit": 20, "offset": 0, "searchText": term}
-                    r = await client.post(url, json=payload)
+                    url = f"https://{tenant}.{wd_ver}.myworkdayjobs.com/wday/cxs/{tenant}/{site}/jobs"
+                    r = await client.post(url, json={"limit": 20, "offset": 0, "searchText": term})
                     if r.status_code != 200:
-                        # Try alternate URL pattern
-                        url2 = f"https://{tenant}.wd1.myworkdayjobs.com/wday/cxs/{tenant}/{site}/jobs"
-                        r = await client.post(url2, json=payload)
-                        if r.status_code != 200:
-                            continue
-                    data = r.json()
-                    for posting in data.get("jobPostings", []):
+                        continue
+                    for posting in r.json().get("jobPostings", []):
                         title = posting.get("title", "")
-                        location_nodes = posting.get("locationsText", "") or ""
-                        external_path = posting.get("externalPath", "")
-                        apply_url = f"https://{tenant}.wd5.myworkdayjobs.com{external_path}" if external_path else ""
-
-                        if not _is_nyc_or_remote(location_nodes):
+                        loc = posting.get("locationsText", "") or ""
+                        path = posting.get("externalPath", "")
+                        apply_url = f"https://{tenant}.{wd_ver}.myworkdayjobs.com{path}" if path else ""
+                        if not _is_nyc_or_remote(loc) or not _is_relevant(title):
                             continue
-                        if not _is_relevant(title):
-                            continue
-
                         jobs.append(_normalize({
-                            "external_id": f"wd_{_id(title + company + external_path)}",
+                            "external_id": f"wd_{_id(title + company + path)}",
                             "title": title, "company": company,
-                            "location": location_nodes or "New York, NY",
-                            "description": f"Workday: {title} at {company}. Search: '{term}'.",
-                            "apply_url": apply_url,
-                            "source": "workday",
+                            "location": loc or "New York, NY",
+                            "description": f"From {company} Workday career site. Role: {title}.",
+                            "apply_url": apply_url, "source": "workday",
                         }))
-                    await asyncio.sleep(0.3)
+                    await asyncio.sleep(0.2)
                 except Exception:
                     pass
 
-    # Deduplicate within workday results
+    # Goldman Sachs — GraphQL API
+    gs_jobs = await _scrape_goldman_sachs()
+    jobs += gs_jobs
+
     seen: set = set()
     unique = [j for j in jobs if not (j["external_id"] in seen or seen.add(j["external_id"]))]
-    print(f"Workday: {len(unique)} relevant jobs")
+    print(f"Workday+Goldman: {len(unique)} relevant jobs")
     return unique
+
+
+async def _scrape_goldman_sachs() -> List[Dict]:
+    """Goldman uses their own GraphQL API at api-higher.gs.com"""
+    jobs = []
+    query = """
+    query SearchRoles($query: String, $locations: [String], $limit: Int, $offset: Int) {
+      roleSearch(query: $query, locations: $locations, limit: $limit, offset: $offset) {
+        roles {
+          id title division businessUnit locations { name }
+          jobDescription experienceLevel
+        }
+        totalCount
+      }
+    }"""
+    terms = ["investor relations", "capital markets", "fund operations", "business development"]
+    async with httpx.AsyncClient(timeout=15,
+        headers={"Content-Type": "application/json",
+                 "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/123.0.0.0"}) as client:
+        for term in terms:
+            try:
+                r = await client.post(
+                    "https://api-higher.gs.com/gateway/api/v1/graphql",
+                    json={"query": query, "variables": {"query": term, "locations": ["New York"], "limit": 20, "offset": 0}},
+                )
+                if r.status_code != 200:
+                    continue
+                for role in r.json().get("data", {}).get("roleSearch", {}).get("roles", []):
+                    title = role.get("title", "")
+                    locs = ", ".join(l.get("name","") for l in role.get("locations", []))
+                    if not _is_nyc_or_remote(locs) or not _is_relevant(title):
+                        continue
+                    role_id = role.get("id", "")
+                    jobs.append(_normalize({
+                        "external_id": f"gs_{role_id}",
+                        "title": title, "company": "Goldman Sachs",
+                        "location": locs or "New York, NY",
+                        "description": f"{role.get('jobDescription','')[:3000]}",
+                        "apply_url": f"https://higher.gs.com/roles/{role_id}",
+                        "source": "workday",
+                    }))
+            except Exception as e:
+                print(f"Goldman GS error: {e}")
+    if jobs:
+        print(f"Goldman Sachs: {len(jobs)} relevant jobs")
+    return jobs
 
 
 async def scrape_greenhouse(companies: List[tuple]) -> List[Dict]:
