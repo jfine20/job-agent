@@ -3,6 +3,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime
 
+from typing import Optional
 from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -113,17 +114,17 @@ def delete_job(job_id: int, db: Session = Depends(get_db)):
 # --- Application tracker endpoints ---
 
 class ApplicationCreate(BaseModel):
-    job_id: int | None = None
+    job_id: Optional[int] = None
     company: str
     title: str
-    apply_url: str | None = None
+    apply_url: Optional[str] = None
     status: str = "applied"
-    notes: str | None = None
+    notes: Optional[str] = None
 
 
 class ApplicationUpdate(BaseModel):
-    status: str | None = None
-    notes: str | None = None
+    status: Optional[str] = None
+    notes: Optional[str] = None
 
 
 @app.get("/api/applications")

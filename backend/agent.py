@@ -6,7 +6,7 @@ client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 MODEL = "claude-sonnet-4-6"
 
 
-def score_job_fit(job_title: str, job_description: str, company: str) -> tuple[float, str]:
+def score_job_fit(job_title: str, job_description: str, company: str):
     """Score a job listing 0-10 for fit with Sam's profile. Returns (score, summary)."""
     prompt = f"""You are a career advisor helping Samantha Shenker find the right job.
 
@@ -93,7 +93,7 @@ COVER_LETTER:
     return {"tailored_bullets": bullets, "cover_letter": cover_letter}
 
 
-def chat(messages: list[dict]) -> str:
+def chat(messages: list) -> str:
     """Conversational agent with Sam's profile as system context."""
     system = f"""You are a dedicated job search assistant helping Samantha Shenker find a job in finance and investor relations.
 
