@@ -193,7 +193,7 @@ WORKDAY_COMPANIES = [
     # Confirmed working — tested directly
     ("Blackstone",           "blackstone",     "wd5", "Blackstone_Careers"),
     ("Morgan Stanley",       "ms",             "wd5", "External"),
-    ("Oaktree Capital",      "oaktree",        "wd1", "oaktree"),
+    ("Oaktree Capital",      "oaktree",        "wd1", "Oaktree"),
     ("JLL",                  "jll",            "wd1", "jllcareers"),
     # Likely Workday — broad searches will catch relevant roles
     ("JPMorgan",             "jpmc",           "wd5", "External"),

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 
-const API = "http://localhost:8000";
+const API = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 const SOURCE_STYLE = {
   greenhouse:       { bg: "bg-emerald-100", text: "text-emerald-700", label: "Greenhouse" },

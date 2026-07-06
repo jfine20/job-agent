@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 
-const API = "http://localhost:8000";
+const API = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 const STATUSES = [
   { value: "applied", label: "Applied", color: "bg-blue-100 text-blue-800" },
