@@ -758,64 +758,23 @@ async def _indeed(ctx, queries: List[str]) -> List[Dict]:
 # Companies that don't use Greenhouse/Lever and aren't well-indexed by job boards.
 # Claude reads the raw page text and extracts job listings from any page structure.
 
+# Only include company pages that are known to load quickly and have real listings
 DIRECT_CAREER_PAGES = [
-    # PE / Investment Banks — own ATS, not on Greenhouse/Lever
-    ("Goldman Sachs",         "https://www.goldmansachs.com/careers/"),
-    ("Morgan Stanley",        "https://www.morganstanley.com/about-us/career"),
-    ("Lazard",                "https://www.lazard.com/careers/"),
-    ("Evercore",              "https://www.evercore.com/careers/"),
-    ("Houlihan Lokey",        "https://www.hl.com/en/careers"),
-    ("Jefferies",             "https://www.jefferies.com/careers/"),
-    ("KKR",                   "https://www.kkr.com/our-firm/careers"),
-    ("Carlyle Group",         "https://www.carlyle.com/careers"),
-    ("TPG",                   "https://www.tpg.com/careers"),
-    ("Warburg Pincus",        "https://www.warburgpincus.com/careers/"),
-    ("Cerberus Capital",      "https://www.cerberuscapital.com/careers/"),
-    ("Leonard Green",         "https://www.leonardgreen.com/careers/"),
-    ("Apollo Global",         "https://www.apollo.com/about/careers"),
-    ("Blackstone",            "https://www.blackstone.com/careers/"),
-    ("Fortress Investment",   "https://www.fortress.com/careers"),
-    ("Oaktree Capital",       "https://www.oaktreecapital.com/careers"),
-    ("Ares Management",       "https://www.aresmgmt.com/careers"),
-    # Real Estate
-    ("Tishman Speyer",        "https://www.tishmanspeyer.com/who-we-are/careers/"),
-    ("Related Companies",     "https://www.related.com/careers"),
-    ("Vornado Realty",        "https://www.vno.com/company/careers"),
-    ("SL Green",              "https://www.slgreen.com/about/careers"),
-    ("RXR",                   "https://www.rxr.com/about/careers"),
-    ("Silverstein Properties","https://www.silversteinproperties.com/careers/"),
-    ("LeFrak Organization",   "https://www.lefrak.com/about/careers/"),
-    ("Paramount Group",       "https://www.paramountgroup.com/careers/"),
-    ("Extell Development",    "https://www.extelldev.com/careers/"),
-    ("Brookfield",            "https://bam.brookfield.com/about/careers"),
-    # Wealth / Family Office
-    ("Northern Trust",        "https://careers.northerntrust.com/"),
-    ("Bessemer Trust",        "https://www.bessemertrust.com/careers"),
-    ("Rockefeller Capital",   "https://www.rockco.com/about-us/careers"),
-    ("Glenmede",              "https://www.glenmede.com/about/careers"),
-    ("Fiduciary Trust",       "https://www.fiduciarytrust.com/about/careers"),
-    ("Silvercrest AM",        "https://www.silvercrestam.com/about/careers"),
-    # Asset Management
-    ("AllianceBernstein",     "https://www.alliancebernstein.com/corporate/careers"),
-    ("Man Group",             "https://www.man.com/careers"),
-    ("Two Sigma",             "https://www.twosigma.com/careers/"),
-    ("D.E. Shaw",             "https://www.deshaw.com/careers/"),
-    ("Citadel",               "https://www.citadel.com/careers/"),
-    ("Point72",               "https://www.point72.com/careers/"),
-    ("Bridgewater",           "https://www.bridgewater.com/careers/"),
-    ("Sculptor Capital",      "https://www.sculptor.com/careers"),
-    ("Coatue Management",     "https://www.coatue.com/careers"),
-    # Climate / ESG
-    ("Energy Impact Partners","https://www.energyimpactpartners.com/about/careers/"),
-    ("Galvanize Climate",     "https://www.galvanizeclimate.com/careers"),
-    ("Lowercarbon Capital",   "https://jobs.lever.co/lowercarbon"),
-    ("Generate Capital",      "https://www.generatecapital.com/careers"),
-    ("Fifth Wall",            "https://www.fifthwall.com/careers"),
-    ("Breakthrough Energy",   "https://www.breakthroughenergy.org/careers/"),
-    ("Congruent Ventures",    "https://www.congruentvc.com/careers/"),
-    ("DBL Partners",          "https://www.dbl.vc/careers/"),
-    ("Prelude Ventures",      "https://www.preludeventures.com/careers/"),
-    ("Aligned Climate",       "https://alignedclimatecapital.com/careers/"),
+    ("KKR",               "https://www.kkr.com/our-firm/careers"),
+    ("Carlyle Group",     "https://www.carlyle.com/careers"),
+    ("Warburg Pincus",    "https://www.warburgpincus.com/careers/"),
+    ("Point72",           "https://point72.com/careers/"),
+    ("Citadel",           "https://www.citadel.com/careers/"),
+    ("Bridgewater",       "https://www.bridgewater.com/careers/"),
+    ("Bessemer Trust",    "https://www.bessemertrust.com/careers"),
+    ("Rockefeller Capital","https://www.rockco.com/about-us/careers"),
+    ("Lazard",            "https://www.lazard.com/careers/"),
+    ("Evercore",          "https://www.evercore.com/careers/"),
+    ("Tishman Speyer",    "https://www.tishmanspeyer.com/who-we-are/careers/"),
+    ("SL Green",          "https://www.slgreen.com/about/careers"),
+    ("Fifth Wall",        "https://www.fifthwall.com/careers"),
+    ("Generate Capital",  "https://www.generatecapital.com/careers"),
+    ("Energy Impact Partners", "https://www.energyimpactpartners.com/about/careers/"),
 ]
 
 
@@ -899,8 +858,8 @@ async def _direct_company_pages(ctx) -> List[Dict]:
     for company_name, career_url in DIRECT_CAREER_PAGES:
         page = await ctx.new_page()
         try:
-            await page.goto(career_url, wait_until="domcontentloaded", timeout=22000)
-            await page.wait_for_timeout(4000)
+            await page.goto(career_url, wait_until="domcontentloaded", timeout=10000)
+            await page.wait_for_timeout(2500)
 
             # Try to click through to actual job listings page
             await _try_click_through(page)
