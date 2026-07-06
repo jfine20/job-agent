@@ -10,6 +10,7 @@ const SOURCE_STYLE = {
   wellfound:        { bg: "bg-orange-100",  text: "text-orange-700",  label: "Wellfound" },
   builtin:          { bg: "bg-pink-100",    text: "text-pink-700",    label: "Built In" },
   indeed:           { bg: "bg-yellow-100",  text: "text-yellow-700",  label: "Indeed" },
+  direct:           { bg: "bg-red-100",     text: "text-red-700",     label: "Company Site" },
 };
 
 const TYPE_STYLE = {
@@ -198,7 +199,7 @@ export default function JobFeed() {
 
   const triggerScrape = async () => {
     setScraping(true);
-    setScrapeMsg("Searching LinkedIn, eFinancialCareers, Greenhouse, Lever, Wellfound, Indeed…");
+    setScrapeMsg("Scraping LinkedIn, eFinancialCareers, Greenhouse, Lever, Wellfound, Indeed, + 50 company career pages directly…");
     await fetch(`${API}/api/jobs/scrape`, { method: "POST" });
     const before = jobs.length;
     const poll = setInterval(async () => {
@@ -281,6 +282,7 @@ export default function JobFeed() {
             <option value="wellfound">Wellfound</option>
             <option value="builtin">Built In</option>
             <option value="indeed">Indeed</option>
+            <option value="direct">Company Sites</option>
           </select>
         </div>
         <div className="flex items-center gap-1.5">

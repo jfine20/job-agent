@@ -299,6 +299,7 @@ async def scrape_playwright_sources(queries: List[str]) -> List[Dict]:
         jobs += await _wellfound(ctx, queries[:4])
         jobs += await _builtin(ctx, queries[:3])
         jobs += await _indeed(ctx, queries[:6])
+        jobs += await _direct_company_pages(ctx)
 
         await browser.close()
 
@@ -543,6 +544,153 @@ async def _indeed(ctx, queries: List[str]) -> List[Dict]:
     finally:
         await page.close()
     print(f"Indeed: {len(jobs)} jobs")
+    return jobs
+
+
+# ─── Source: Direct company career pages ─────────────────────────────────────
+# Companies that don't use Greenhouse/Lever and aren't well-indexed by job boards.
+# Claude reads the raw page text and extracts job listings from any page structure.
+
+DIRECT_CAREER_PAGES = [
+    # PE / Investment Banks
+    ("Goldman Sachs", "https://www.goldmansachs.com/careers/"),
+    ("Morgan Stanley", "https://www.morganstanley.com/about-us/careers/"),
+    ("JPMorgan", "https://careers.jpmorgan.com/us/en/home"),
+    ("Lazard", "https://lazard.com/careers/"),
+    ("Evercore", "https://www.evercore.com/careers/"),
+    ("Houlihan Lokey", "https://www.hl.com/en/careers"),
+    ("Jefferies", "https://www.jefferies.com/careers/"),
+    ("KKR", "https://www.kkr.com/our-firm/careers"),
+    ("Carlyle Group", "https://www.carlyle.com/careers"),
+    ("TPG", "https://www.tpg.com/careers"),
+    ("Warburg Pincus", "https://www.warburgpincus.com/careers/"),
+    ("Cerberus Capital", "https://www.cerberuscapital.com/careers/"),
+    ("Leonard Green", "https://www.leonardgreen.com/careers/"),
+    ("Apollo Global", "https://www.apollo.com/about/careers"),
+    ("Blackstone", "https://www.blackstone.com/careers/"),
+    # Real Estate
+    ("Tishman Speyer", "https://www.tishmanspeyer.com/who-we-are/careers/"),
+    ("Related Companies", "https://www.related.com/careers"),
+    ("Vornado Realty", "https://www.vno.com/company/careers"),
+    ("SL Green", "https://www.slgreen.com/about/careers"),
+    ("Boston Properties", "https://www.bxp.com/careers"),
+    ("RXR", "https://www.rxr.com/about/careers"),
+    ("Silverstein Properties", "https://www.silversteinproperties.com/careers/"),
+    ("LeFrak", "https://www.lefrak.com/careers/"),
+    ("Extell Development", "https://www.extelldev.com/careers/"),
+    ("Paramount Group", "https://www.paramountgroup.com/careers/"),
+    # Wealth / Family Office
+    ("Northern Trust", "https://jobs.northerntrust.com/"),
+    ("Bessemer Trust", "https://www.bessemer.com/careers"),
+    ("Glenmede", "https://www.glenmede.com/about/careers"),
+    ("Fiduciary Trust", "https://www.ftci.com/about/careers"),
+    ("Rockefeller Capital", "https://www.rockco.com/about-us/careers"),
+    ("Silvercrest", "https://www.silvercrestam.com/careers"),
+    ("GenSpring Family Offices", "https://www.genspring.com/careers"),
+    ("Bessemer Trust", "https://www.bessemer.com/careers"),
+    # Asset Management / Alt Platforms
+    ("AllianceBernstein", "https://www.alliancebernstein.com/corporate/careers"),
+    ("Pimco", "https://careers.pimco.com/"),
+    ("Franklin Templeton", "https://franklintempleton.wd5.myworkdayjobs.com/External"),
+    ("Man Group", "https://www.man.com/careers"),
+    ("Two Sigma", "https://www.twosigma.com/careers/"),
+    ("D.E. Shaw", "https://www.deshaw.com/careers/"),
+    ("Citadel", "https://www.citadel.com/careers/"),
+    ("Point72", "https://www.point72.com/careers/"),
+    # Climate / ESG
+    ("Energy Impact Partners", "https://www.energyimpactpartners.com/about/careers/"),
+    ("Galvanize Climate", "https://www.galvanizeclimate.com/careers"),
+    ("Lowercarbon Capital", "https://jobs.lowercarbon.com/"),
+    ("Generate Capital", "https://generatecapital.com/careers"),
+    ("Fifth Wall", "https://fifthwall.com/careers"),
+    ("Breakthrough Energy", "https://www.breakthroughenergy.org/careers/"),
+    ("Aligned Climate Capital", "https://www.alignedclimatecapital.com/about/careers"),
+    ("Congruent Ventures", "https://www.congruentvc.com/careers/"),
+    ("DBL Partners", "https://www.dblpartners.vc/careers/"),
+    ("Prelude Ventures", "https://www.preludeventures.com/careers/"),
+]
+
+
+def _extract_jobs_with_claude(company: str, url: str, page_text: str) -> list:
+    """Use Claude Haiku to extract structured job listings from arbitrary career page text."""
+    import os, anthropic as _ant
+    _client = _ant.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+
+    prompt = f"""Extract all open job listings from this company's career page.
+
+Company: {company}
+URL: {url}
+Page text (truncated):
+{page_text[:6000]}
+
+Return ONLY a JSON array. Each item: {{"title": "...", "location": "...", "url": "..."}}
+- Only include roles relevant to: investor relations, capital markets, fundraising, fund operations, business development, client service, operations, chief of staff, executive assistant, IR coordinator, capital formation, investment associate, ESG, sustainability, real estate
+- Only include NYC, remote, or US-based roles
+- If no relevant jobs found, return []
+- Do not include engineering, legal, accounting, or IT roles
+- Return [] if the page text doesn't contain job listings"""
+
+    try:
+        resp = _client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=800,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = resp.content[0].text.strip()
+        # Extract JSON from response
+        import json, re as _re
+        match = _re.search(r'\[.*\]', text, _re.DOTALL)
+        if match:
+            return json.loads(match.group())
+    except Exception as e:
+        print(f"Claude extraction error for {company}: {e}")
+    return []
+
+
+async def _direct_company_pages(ctx) -> List[Dict]:
+    jobs = []
+    page = await ctx.new_page()
+    try:
+        for company_name, career_url in DIRECT_CAREER_PAGES:
+            try:
+                await page.goto(career_url, wait_until="domcontentloaded", timeout=18000)
+                await page.wait_for_timeout(2500)
+
+                # Scroll to load lazy content
+                for _ in range(3):
+                    await page.evaluate("window.scrollBy(0, 800)")
+                    await page.wait_for_timeout(400)
+
+                # Get visible text (faster than full HTML)
+                page_text = await page.evaluate("document.body.innerText")
+
+                extracted = _extract_jobs_with_claude(company_name, career_url, page_text)
+
+                for item in extracted:
+                    title = item.get("title", "").strip()
+                    location = item.get("location", "New York, NY").strip()
+                    job_url = item.get("url", "").strip() or career_url
+
+                    if not title or not _is_relevant(title):
+                        continue
+
+                    jobs.append(_normalize({
+                        "external_id": f"direct_{_id(title + company_name)}",
+                        "title": title,
+                        "company": company_name,
+                        "location": location,
+                        "description": f"Found directly on {company_name} career page ({career_url}). Role: {title}.",
+                        "apply_url": job_url,
+                        "source": "direct",
+                    }))
+
+                await page.wait_for_timeout(1000)
+            except Exception as e:
+                print(f"Direct page error {company_name}: {e}")
+    finally:
+        await page.close()
+
+    print(f"Direct company pages: {len(jobs)} relevant jobs")
     return jobs
 
 
